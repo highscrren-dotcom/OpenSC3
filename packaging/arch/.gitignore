@@ -1,0 +1,6 @@
+# makepkg: клон, сборка и пакет — не в git
+/OpenSC3/
+/src/
+/pkg/
+*.pkg.tar.*
+*.log

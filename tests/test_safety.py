@@ -167,7 +167,7 @@ class Frames(unittest.TestCase):
         allowed = {"write_frame": {"write.py"}, "check_write_frame": {"protocol.py", "write.py"},
                    "write_ack": {"protocol.py", "write.py"}, "_send": {"write.py"}, "_step": {"write.py"},
                    "_rollback": {"write.py"}, "set_output": {"device.py", "write.py", "usb.py"},
-                   "_transact": {"device.py"}, "apply": {"write.py", "cli.py"}}
+                   "_transact": {"device.py"}, "apply": {"write.py", "cli.py", WINDOW_WRITE[0]}}  # окно — Window
         for f in sources():
             tree = ast.parse(f.read_text())
             for name, where in allowed.items():
@@ -319,6 +319,119 @@ class Cli(unittest.TestCase):
         imported = {a.name for n in ast.walk(fn) if isinstance(n, ast.ImportFrom) and n.module == "obs"
                     for a in n.names}
         self.assertIn("live_status", imported)
+
+
+# Окно пишет в SC3 ровно из одного места (docs/WRITE.md, «Сторож»): ручка-поправка MIC, слот опроса.
+WINDOW_WRITE = ("app/backend.py", "ControlWorker", "_write_trim")
+
+
+def _method(cls: ast.ClassDef, name: str) -> ast.FunctionDef | None:
+    return next((n for n in cls.body if isinstance(n, ast.FunctionDef) and n.name == name), None)
+
+
+def _self_attr(n: ast.AST, attr: str | None = None) -> bool:
+    """`self.<attr>` (любой attr, если None)."""
+    return (isinstance(n, ast.Attribute) and isinstance(n.value, ast.Name) and n.value.id == "self"
+            and (attr is None or n.attr == attr))
+
+
+def window_apply_problems(files: dict[str, str]) -> list[str]:
+    """Нарушения правила «окно зовёт write.apply из одного места» по исходникам окна {путь в пакете: текст}:
+    - `apply` упоминается только в `ControlWorker._write_trim` (app/backend.py), ровно один прямой вызов;
+    - `live=` — метод `self`, который каждый раз спрашивает OBS заново (`_live_status()` → `self._core.live_status()`),
+      а не готовый ответ (`self._live`); `guard=` — `poll.WriteGuard(self._guard)`;
+    - до вызова — проверка предохранителя (`_trim_unwanted()` смотрит `self._write_enabled`);
+    - `_write_trim` зовётся только из слота опроса `_slot`, прямым вызовом."""
+    path, cls_name, fn_name = WINDOW_WRITE
+    problems = []
+    for name, text in files.items():
+        tree = ast.parse(text)
+        owner, parent = functions_of(tree), parents_of(tree)
+        for n in refs(tree, "apply"):
+            if (name, owner[n]) != (path, fn_name):
+                problems.append(f"write.apply вне {fn_name}: {name}:{n.lineno}")
+            elif not (isinstance(parent[n], ast.Call) and parent[n].func is n):
+                problems.append(f"write.apply как значение: {name}:{n.lineno}")
+    tree = ast.parse(files.get(path, ""))
+    cls = next((n for n in ast.walk(tree) if isinstance(n, ast.ClassDef) and n.name == cls_name), None)
+    fn = _method(cls, fn_name) if cls is not None else None
+    if fn is None:
+        return [*problems, f"нет {cls_name}.{fn_name} в {path}"]
+    sites = calls(fn, "apply")
+    if len(sites) != 1:
+        return [*problems, f"{fn_name}: вызовов apply {len(sites)}, а нужен один"]
+    (site,) = sites
+    kw = {k.arg: k.value for k in site.keywords}
+    live = kw.get("live")
+    method = _method(cls, live.attr) if _self_attr(live) else None
+    status = _method(cls, "_live_status")
+    if method is None or status is None:
+        problems.append(f"{fn_name}: live= — не метод self ({ast.unparse(live) if live else 'нет'})")
+    else:
+        if not any(_self_attr(c.func, "_live_status") for c in calls(method, "_live_status")):
+            problems.append(f"{live.attr}: не спрашивает self._live_status()")
+        if any(_self_attr(n, "_live") for n in ast.walk(method)):
+            problems.append(f"{live.attr}: смотрит готовый self._live вместо свежего ответа OBS")
+        if not any(_self_attr(c.func.value, "_core") for c in calls(status, "live_status")
+                   if isinstance(c.func, ast.Attribute)):
+            problems.append("_live_status: не спрашивает self._core.live_status()")
+    guard = kw.get("guard")
+    if guard is None or ast.unparse(guard) != "poll.WriteGuard(self._guard)":
+        problems.append(f"{fn_name}: guard= не poll.WriteGuard(self._guard)")
+    fuse = [c for c in calls(fn, "_trim_unwanted") if c.lineno < site.lineno]
+    check = _method(cls, "_trim_unwanted")
+    if not fuse or check is None or not any(_self_attr(n, "_write_enabled") for n in ast.walk(check)):
+        problems.append(f"{fn_name}: до apply нет проверки предохранителя (_trim_unwanted → self._write_enabled)")
+    owner, parent = functions_of(tree), parents_of(tree)
+    for n in refs(tree, fn_name):
+        if owner[n] != "_slot" or not (isinstance(parent[n], ast.Call) and parent[n].func is n):
+            problems.append(f"{fn_name} зовётся не из _slot (или передаётся как значение): строка {n.lineno}")
+    return problems
+
+
+def window_sources() -> dict[str, str]:
+    return {rel(f): f.read_text() for f in sources() if rel(f).startswith("app/")}
+
+
+class Window(unittest.TestCase):
+    """Запись из окна — ровно одно место: `ControlWorker._write_trim`, через `write.apply` со свежим статусом OBS,
+    гвардом слотов и предохранителем. Всё остальное в окне `apply` не упоминает."""
+
+    def test_window_writes_from_one_place(self):
+        self.assertEqual(window_apply_problems(window_sources()), [])
+
+    def test_violations_are_caught(self):
+        """Сторож видит нарушение: вызов из другого места окна, готовый ответ об эфире, другой гвард, нет
+        проверки предохранителя, `_write_trim` не из слота."""
+        files = window_sources()
+        path = WINDOW_WRITE[0]
+        text = files[path]
+        site = "res = W.apply(session, "
+        self.assertEqual(text.count(site), 1)
+        bad = {
+            "другая функция бэкенда": text.replace(
+                "    def refresh_poll(self) -> None:\n",
+                "    def refresh_poll(self) -> None:\n        W.apply(self._session, [], live=self._live_before_acp,"
+                " guard=poll.WriteGuard(self._guard))\n", 1),
+            "готовый ответ об эфире": text.replace("live=self._live_before_acp", "live=self._cached_live", 1)
+                                       .replace("    def _wait_slot(self) -> None:\n",
+                                                "    def _cached_live(self):\n        return self._live\n\n"
+                                                "    def _wait_slot(self) -> None:\n", 1),
+            "гвард полных наборов не тот": text.replace("guard=poll.WriteGuard(self._guard)", "guard=self._guard", 1),
+            "без предохранителя": text.replace("        if why := self._trim_unwanted():\n"
+                                               "            self.trimDone.emit(db, None, f\"поправка MIC не записана: "
+                                               "{why}\")\n            return\n        session = self._session\n",
+                                               "        session = self._session\n", 1),
+            "_write_trim не из слота": text.replace("    def refresh_poll(self) -> None:\n",
+                                                    "    def refresh_poll(self) -> None:\n        self._write_trim()\n",
+                                                    1),
+        }
+        for what, mutated in bad.items():
+            with self.subTest(what=what):
+                self.assertNotEqual(mutated, text, "мутация не легла — поправь тест под исходник")
+                self.assertTrue(window_apply_problems({**files, path: mutated}), what)
+        elsewhere = {**files, "app/view.py": files["app/view.py"] + "\n\ndef oops(s, p):\n    return W.apply(s, p)\n"}
+        self.assertTrue(window_apply_problems(elsewhere))
 
 
 class Obs(unittest.TestCase):

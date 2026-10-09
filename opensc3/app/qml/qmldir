@@ -19,6 +19,7 @@ Sc3Panel 1.0 Sc3Panel.qml
 Sc3Window 1.0 Sc3Window.qml
 Header 1.0 Header.qml
 ProfileMenu 1.0 ProfileMenu.qml
+SettingsMenu 1.0 SettingsMenu.qml
 Notice 1.0 Notice.qml
 Drawer 1.0 Drawer.qml
 MicDrawer 1.0 MicDrawer.qml

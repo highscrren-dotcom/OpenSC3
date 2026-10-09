@@ -1,4 +1,4 @@
-"""Один набор чтений ACP → `Sc3State`. Минимум кадров: 0x00 (в verify), 0x02, 0x07, 0xB6, 0x85, 0x86 — шесть.
+"""Один набор чтений ACP → `Sc3State`. Минимум кадров: 0x00 (в verify), 0x02, 0x07, 0xB6, 0x85, 0x86, 0xAC — семь.
 
 Вызывающий уже открыл устройство и спросил `AcpGuard` (эфир не идёт, интервал выдержан). Здесь только чтение
 через `Sc3`; чего по ACP не узнать — `None` (model.py). Карта кнопок проверена 08.10 с владельцем по дампам
@@ -9,12 +9,15 @@
   больше 0 — `muted = False` (MUTE всегда даёт 0); ровно 0 — MUTE или «ползунок внизу», из одного чтения не
   отличить: `muted = None`. Догадку по ходу громкости во времени делает опрос окна (app/poll.py);
 - CHANGE VOICE — пресет: `0x85` (сдвиг высоты) включён, голос узнаётся по величине сдвига;
-- ELECTRIC — `0x86` (автотюн): буква SDK по кругу → точка панели в той же позиции по строкам (`ELECTRIC_KEYS`).
+- ELECTRIC — `0x86` (автотюн): буква SDK по кругу → точка панели в той же позиции по строкам (`ELECTRIC_KEYS`);
+- поправка MIC в ПК — усиление узла `0xAC` (Q12, 4096 = 0 дБ; write.MIC_TRIM): её меняют только окно и CLI, поэтому
+  она читается в наборе и после записи, а в круг опроса не входит.
 MIC MONITOR, MUTE LINE OUT, ползунки Headphone и Line Out, RGB, пэды в ACP не видны — `None`/`locked`.
 """
 from __future__ import annotations
 
 import struct
+from dataclasses import replace
 
 from . import layouts as L
 from . import protocol as P
@@ -25,13 +28,14 @@ ADC1, QUERY = 0x07, 0x02
 LINE_IN = 0xB6       # на деле ползунок Line In (проверено 08.10)
 PITCH = 0x85         # сдвиг высоты: по нему узнаётся голос CHANGE VOICE
 AUTOTUNE = 0x86      # ELECTRIC
+MIC_TRIM = 0xAC      # поправка MIC в ПК (write.MIC_TRIM; живая проба 09.10: доходит до ПК ровно на заданные дБ)
 STEP, STEPS = 132, 31  # у ползунков 32 положения 0…31, шаг 132 (4092 — верх)
 # Лёгкий опрос окна (решение 9): одно чтение раз в 0,5 с по кругу (нагрузка как на стенде этапа 2). Кнопки SC3 не
 # шлют HID — голос и ELECTRIC окно узнаёт только чтением, поэтому они в круге: Mic — раз в 1 с, голос, ELECTRIC
 # и Line In — раз в 3 с. Полный набор `read_state` — отдельно, не чаще раза в 5 с.
 POLL_CYCLE = (ADC1, PITCH, ADC1, AUTOTUNE, ADC1, LINE_IN)
-FULL_SET = (QUERY, ADC1, LINE_IN, PITCH, AUTOTUNE)  # то, что read_state читает после verify()
-NEED = {LINE_IN: 3, PITCH: 2, AUTOTUNE: 2}  # минимум значений узла
+FULL_SET = (QUERY, ADC1, LINE_IN, PITCH, AUTOTUNE, MIC_TRIM)  # то, что read_state читает после verify()
+NEED = {LINE_IN: 3, PITCH: 2, AUTOTUNE: 2, MIC_TRIM: 3}  # минимум значений узла
 
 # Голос CHANGE VOICE → сдвиг высоты `0x85` values[1] (дампы 08.10). Выключен — values[0] = 0, а высота остаётся
 # от последнего голоса. Прочие узлы пресета для узнавания не нужны.
@@ -92,6 +96,11 @@ def line_in_channel(values: list[int]) -> Channel:
     return Channel(fader=line_in_fader(values[2]), muted=_muted(values[2]))
 
 
+def mic_trim(values: list[int]) -> float | None:
+    """Значения узла `0xAC` → поправка MIC в дБ; усиление ≤ 0 (выключено, −∞) — None: ручке показать нечего."""
+    return L.q12_db(values[2]) if values[2] > 0 else None
+
+
 def dsp_load(query_body: bytes) -> float | None:
     """Тело `0x02` → загрузка процессора 0..1 (None — частота не указана)."""
     qd = L.query(query_body)
@@ -115,7 +124,7 @@ def _foreign(sc3: Sc3) -> bool:
 
 
 def read_state(sc3: Sc3, now: float) -> Sc3State:
-    """verify() и пять чтений. Чужая сборка → FOREIGN; сбой транспорта или хоть одно непрочитанное → ERROR
+    """verify() и шесть чтений. Чужая сборка → FOREIGN; сбой транспорта или хоть одно непрочитанное → ERROR
     (без значений: половине набора верить нельзя). `now` — time.time() вызывающего, станет `read_at`."""
     bad = verify_link(sc3)
     if bad is not None:
@@ -130,12 +139,12 @@ def read_state(sc3: Sc3, now: float) -> Sc3State:
                 return error
     except P.ProtocolError:
         return error
-    q, adc1, line_in, pitch, tune = got
+    q, adc1, line_in, pitch, tune, trim = got
     if any(len(v) < NEED[c] for c, v in zip(FULL_SET[2:], got[2:], strict=True)):
         return error
     try:
         load = dsp_load(q)
-        mic = mic_channel(adc1)
+        mic = replace(mic_channel(adc1), trim_db=mic_trim(trim))
     except (KeyError, struct.error):  # тело короче раскладки
         return error
     return Sc3State(

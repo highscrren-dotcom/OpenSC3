@@ -36,7 +36,12 @@ JOBS: dict[str, tuple[str, str | None, bool, str]] = {
     "drawer-voice": ("normal", "voice", False, "Ящик CHANGE VOICE"),
     "drawer-electric": ("normal", "electric", False, "Ящик ELECTRIC"),
     "software-panel": ("normal", None, True, "Без GPU"),
+    "trim": ("write", None, False, "Ручка MIC: запись разрешена"),
+    "trim-onair": ("write-onair", None, False, "Ручка MIC в эфире — под замком"),
+    "trim-off": ("normal", None, False, "Запись выключена: подсказка"),
+    "settings": ("normal", None, False, "Меню-шестерёнка: предохранитель"),
 }
+TIPS = {"trim-off": "trim-off", "settings": "settings"}  # кадр → `--tip` (подсказка или меню без мыши)
 SHEET = ["panel", "onair", "onair-muted", "disconnected", "no-access", "unknown-live"]
 
 
@@ -47,6 +52,8 @@ def shoot(name: str, out: Path) -> bool:
         cmd += ["--section", section]
     if software:
         cmd.append("--software")
+    if name in TIPS:
+        cmd += ["--tip", TIPS[name]]
     r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
     sys.stdout.write(r.stdout)
     if r.returncode != 0:

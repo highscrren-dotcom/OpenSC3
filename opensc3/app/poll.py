@@ -1,10 +1,15 @@
 """Лёгкий опрос SC3 окном (решение 9): что читать в очередном слоте, когда слот и как разобрать ответ.
 
 Без Qt и без ввода-вывода — это решает и разбирает, а читает рабочий поток бэкенда (backend.ControlWorker).
-Слот — одно чтение ACP раз в 0,5 с по сетке монотонных часов. Сначала полный набор `reader.FULL_SET` — по одному
-чтению на слот, а не пачкой; затем круг `reader.POLL_CYCLE` (Mic, голос, Mic, ELECTRIC, Mic, Line In). «Обновить»
-ставит в очередь то, чего в круге нет (загрузку DSP): оно занимает ближайший слот, пачки нет. Разбор — функциями
-`reader`, результат сразу идёт в `Sc3State`.
+Слот — одно чтение ACP раз в 0,5 с по сетке монотонных часов. В начале сессии — поправка MIC (`0xAC`: её меняют
+только окно и CLI, в круге её нет), затем полный набор `reader.FULL_SET` — по одному чтению на слот, а не пачкой;
+затем круг `reader.POLL_CYCLE` (Mic, голос, Mic, ELECTRIC, Mic, Line In). «Обновить» ставит в очередь то, чего в
+круге нет (загрузку DSP): оно занимает ближайший слот, пачки нет. Разбор — функциями `reader`, результат — поля
+`Sc3State` (`merge`).
+
+Запись из окна (ручка-поправка MIC) занимает те же слоты: каждое обращение сеанса `write.apply` — чтение типов,
+снимок, кадр, чтение назад — ждёт свой слот (`Sc3.pace`), а `WriteGuard` отдаёт apply правило слотов вместо
+правила полных наборов (раз в 5 с).
 
 Догадка «MUTE» (`MuteGuess`): аппаратный MUTE лишь обнуляет громкость канала, и одно чтение его не отличит от
 «ползунок внизу» (docs/RESEARCH.md §14). Но MUTE обнуляет её скачком, а рука ведёт ползунок через промежуточные
@@ -20,10 +25,13 @@ from dataclasses import replace
 from opensc3 import protocol as P
 from opensc3 import reader as R
 from opensc3.guard import POLL_INTERVAL
-from opensc3.model import Channel
+from opensc3.model import Channel, Live, Sc3State
 
 MAX_FAILS = 3   # неудачи подряд → опрос выключен до переподключения SC3
-REFRESH = tuple(c for c in R.FULL_SET if c not in R.POLL_CYCLE)  # «Обновить» в опросе: чего нет в круге (0x02)
+# «Обновить» в опросе: чего нет в круге (0x02). Поправку MIC оно не перечитывает: её меняют только окно и CLI, а
+# CLI, пока окно держит SC3, к нему не попадёт — поправка читается в начале сессии и после записи.
+REFRESH = tuple(c for c in R.FULL_SET if c not in R.POLL_CYCLE and c != R.MIC_TRIM)
+TRIM_STEP = 0.5   # шаг ручки-поправки, дБ (границы — write.TRIM_DB)
 MUTE_DROP = 0.10  # с какого положения обнуление считается скачком MUTE, а не концом пути ползунка
 MUTE_SLACK = 0.1  # запас на дрожание слотов
 
@@ -82,8 +90,13 @@ class BadReply(ValueError):
 
 
 class Plan:
-    def __init__(self, full_set_first: bool = True) -> None:
-        self.queue: list[int] = list(R.FULL_SET) if full_set_first else []
+    def __init__(self, full_set_first: bool = True, trim: bool = False) -> None:
+        """`full_set_first` — сначала полный набор по одному чтению на слот; `trim` — поправку MIC первой (окно:
+        без неё ручка неактивна), даже без полного набора — пока окно было скрыто, её мог поменять CLI."""
+        start = list(R.FULL_SET) if full_set_first else []
+        if trim:
+            start = [R.MIC_TRIM] + [c for c in start if c != R.MIC_TRIM]
+        self.queue: list[int] = start
         self.turn = 0
         self.mute = {ctrl: MuteGuess(gap) for ctrl, gap in MUTE_GAP.items()}
 
@@ -124,9 +137,44 @@ class Plan:
                 return {"electric_key": R.electric_key(values)}
             if ctrl == R.PITCH:
                 return {"voice": R.voice(values)}
+            if ctrl == R.MIC_TRIM:
+                return {"mic_trim": R.mic_trim(values)}
         except (KeyError, IndexError, struct.error) as e:
             raise BadReply(f"{ctrl:#04x}: {e}") from None
         raise BadReply(f"{ctrl:#04x}: не из набора опроса")
+
+
+def merge(st: Sc3State, update: dict) -> Sc3State:
+    """Поля из чтения опроса (или итога записи) → новое `Sc3State`. Чтение `0x07` даёт канал Mic без поправки —
+    прочитанная поправка остаётся; `mic_trim` — поправка MIC в дБ (None — неизвестна)."""
+    update = dict(update)
+    trim = update.pop("mic_trim", st.mic.trim_db)
+    mic = update.pop("mic", st.mic)
+    return replace(st, mic=replace(mic, trim_db=trim), **update)
+
+
+def trim_step(db: float, lo: float, hi: float) -> float:
+    """Значение ручки → ближайший шаг 0,5 дБ в границах [lo, hi]."""
+    return min(max(round(db / TRIM_STEP) * TRIM_STEP, lo), hi)
+
+
+class WriteGuard:
+    """Гвард, который окно отдаёт `write.apply` вместо AcpGuard. Эфир — те же проверки AcpGuard (`check_live`; ON и
+    UNKNOWN — отказ). Интервал — правило лёгкого опроса, а не полных наборов: перед сеансом слот должен быть
+    свободен (`check_poll`), а каждое обращение внутри сеанса само ждёт свой слот и отмечает его (`Sc3.pace`).
+    Отметку полного набора (`mark`) сеанс записи не ставит: полного набора не было, слоты уже отмечены."""
+
+    def __init__(self, guard) -> None:
+        self.guard = guard
+
+    def check(self, live: Live) -> str:
+        return self.guard.check_poll(live)
+
+    def check_live(self, live: Live) -> str:
+        return self.guard.check_live(live)
+
+    def mark(self) -> None:
+        pass
 
 
 def next_slot(t0: float, k: int, now: float, last: float, interval: float = POLL_INTERVAL) -> tuple[int, float]:

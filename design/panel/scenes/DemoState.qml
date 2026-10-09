@@ -22,7 +22,9 @@ QtObject {
     property string voice: "Male"          // as printed; "" = CHANGE VOICE off
     property string customLit: "A"         // CUSTOM pad that is lit (playing)
     property real trimMic: 2.5             // software trims under the MIC and LINE IN faders, dB
-    property real trimLineIn: 0.0
+    property bool trimMicPending: false    // the MIC trim is still being written (asked, not read back)
+    property real trimLineIn: 0.0          // LINE IN trim: not written yet (its path to the PC is unproven)
+    property bool writeEnabled: true       // the write fuse in the header gear («Разрешить запись в SC3»)
     property var unknown: ({})             // field -> true when it is not known: drawn neutral, no guess
     property var guess: ({})               // key -> true when it is lit by the poll's guess (MUTE): «≈» on the cap
     property var dsp: DemoDsp.dsp          // drawer data (EQ, gate, voices...): synthetic, mock-ups only
@@ -53,4 +55,6 @@ QtObject {
 
     function refresh() {}
     function toggleMicMute() {}
+    function setMicTrim(db) { trimMic = db; }
+    function setWriteEnabled(on) { writeEnabled = on; }
 }

@@ -89,6 +89,24 @@ class Contract(unittest.TestCase):
             self.assertIs(self.core.meter(NODES), m.return_value)
         m.assert_called_once_with(NODES)
 
+    def test_window_journal_and_settings(self):
+        """Окно пишет в тот же журнал, что `sc3 undo` (`write.default_journal`), а предохранитель хранит в QSettings
+        «opensc3»; у подделки — журнал и настройки в памяти (настоящие владельца не трогаются)."""
+        from opensc3 import write
+        from opensc3.app.core import SETTINGS_APP, SETTINGS_ORG
+        from opensc3.app.fake import FakeCore, MemorySettings
+        self.assertEqual(self.core.journal_path(), write.default_journal())
+        fake = FakeCore()
+        self.assertIsNone(fake.journal_path())
+        self.assertIsInstance(fake.settings(), MemorySettings)
+        self.assertEqual((SETTINGS_ORG, SETTINGS_APP), ("opensc3", "opensc3"))
+        try:
+            from PySide6.QtCore import QSettings  # noqa: F401
+        except ImportError:
+            return
+        s = self.core.settings()   # только создаётся: ничего не читаем и не пишем
+        self.assertEqual((s.organizationName(), s.applicationName()), (SETTINGS_ORG, SETTINGS_APP))
+
 
 class Busy(unittest.TestCase):
     def test_cli_says_who_holds_sc3(self):

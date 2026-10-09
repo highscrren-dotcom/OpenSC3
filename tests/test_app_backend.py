@@ -10,6 +10,7 @@ import time
 import unittest
 
 from opensc3 import reader as R
+from opensc3.app import poll
 
 HAVE_QT = importlib.util.find_spec("PySide6") is not None
 app = None
@@ -108,8 +109,8 @@ class Poll(BackendCase):
             spin(0.45)
         self.assertTrue(wait_until(lambda: len(core.poll_reads) >= 8, timeout=8))
         ctrls = [r[0] for r in core.poll_reads]
-        n = len(R.FULL_SET)
-        self.assertEqual(ctrls[:n + 1], [*R.FULL_SET, R.ADC1])  # полный набор по одному чтению на слот
+        start = poll.Plan(trim=True).queue                      # поправка MIC, затем полный набор
+        self.assertEqual(ctrls[:len(start) + 1], [*start, R.ADC1])  # по одному чтению на слот
         times = [r[1] for r in core.poll_reads]
         gaps = [b_ - a for a, b_ in itertools.pairwise(times)]
         self.assertGreaterEqual(min(gaps), 0.499, gaps)       # не больше одного чтения за 0,5 с
@@ -126,7 +127,8 @@ class Poll(BackendCase):
     def test_cycle_order(self):
         core, _ = self.visible(full_set_first=False)
         self.assertTrue(wait_until(lambda: len(core.poll_reads) >= 5, timeout=6))
-        self.assertEqual([r[0] for r in core.poll_reads[:5]], list(R.POLL_CYCLE[:5]))
+        # и без полного набора поправка MIC — первой (её мог поменять CLI, пока окно было скрыто), потом круг
+        self.assertEqual([r[0] for r in core.poll_reads[:5]], [R.MIC_TRIM, *R.POLL_CYCLE[:4]])
 
     def test_hidden_window_closes_sc3(self):
         core, b = self.visible(full_set_first=False)

@@ -36,7 +36,7 @@ class Channel:
     догадкой опроса по резкому обнулению (`muted_guess=True`; `fader` тогда — последнее ненулевое положение)."""
     fader: float | None = None    # 0..1 — зеркало настоящего ползунка
     muted: bool | None = None     # аппаратный Mute SC3 (клавиша на корпусе); None — не узнать
-    trim_db: float | None = None  # программная поправка; None, пока нет записи (решение 4)
+    trim_db: float | None = None  # программная поправка в ПК, дБ (MIC — узел 0xAC); None — не прочитана / нет её
     locked: bool = False
     muted_guess: bool = False     # `muted` — догадка по ходу громкости во времени, а не прочитанный факт
 

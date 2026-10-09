@@ -93,6 +93,7 @@ class CliWrite(unittest.TestCase):
         code, out, err, _ = self.run_cli(["set", "mic.trim", "1", "--write"])
         self.assertEqual(code, 0, err)
         self.assertIn("✓ mic.trim", out)
+        self.assertIn("вернуть как было: sc3 undo --write", out)
         self.assertEqual(self.t.nodes[W.MIC_TRIM][2], 4596)
         rows = [json.loads(x) for x in self.journal.read_text().splitlines()]
         self.assertEqual([(r["op"], r.get("key"), r.get("before"), r.get("value"), r.get("ok")) for r in rows],
@@ -104,6 +105,8 @@ class CliWrite(unittest.TestCase):
         code, out, err, _ = self.run_cli(["undo", "--write"])
         self.assertEqual(code, 0, err)
         self.assertEqual(self.t.nodes[W.MIC_TRIM][2], 4090)
+        self.assertIn("снова применить отменённое: sc3 undo --write", out)  # после отката — не «вернуть как было»
+        self.assertNotIn("вернуть как было", out)
 
     def test_interrupted_undo_resumes(self):
         with mock.patch("time.sleep"):

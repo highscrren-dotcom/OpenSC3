@@ -1,15 +1,18 @@
 import QtQuick
 
 // Narrow window header above the panel (Russian): connection, sound profile, microphone
-// mute and on-air state. Deliberately quiet - the panel is the main thing.
+// mute, on-air state and the settings gear (the write fuse). Deliberately quiet - the panel
+// is the main thing.
 Rectangle {
     id: header
     required property Tokens theme
     required property QtObject sc3     // Backend (app) or DemoState (mock-ups): same shape
     property bool profileOpen: false
     property int profileHover: -1      // mock-ups: profile row drawn as hovered
+    property bool settingsOpen: false
     signal profileClicked()
     signal refreshClicked()
+    signal settingsClicked()
     readonly property Item profileChip: chip          // the profile menu hangs under it
     readonly property real ts: theme.uiTextSize
 
@@ -233,6 +236,37 @@ Rectangle {
                     border.color: header.theme.onAir
                 }
                 Ui { text: "Эфир не определён" }
+            }
+        }
+
+        // Settings: the write fuse «Разрешить запись в SC3» (SettingsMenu.qml).
+        Item {
+            id: gear
+            objectName: "settingsGear"   // tests click it by name
+            width: 22
+            height: 22
+            anchors.verticalCenter: parent.verticalCenter
+            Glyph {
+                anchors.centerIn: parent
+                size: 18
+                stroke: 1.8
+                color: gearArea.containsMouse || header.settingsOpen ? header.theme.headerText : header.theme.headerDim
+                strokePath: Icons.gear
+            }
+            MouseArea {
+                id: gearArea
+                anchors.fill: parent
+                anchors.margins: -5
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: header.settingsClicked()
+            }
+            SettingsMenu {
+                visible: header.settingsOpen
+                theme: header.theme
+                sc3: header.sc3
+                x: gear.width + 10 - width
+                y: gear.height + 13
             }
         }
     }

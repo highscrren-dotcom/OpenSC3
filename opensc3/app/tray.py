@@ -1,8 +1,10 @@
 """Значок SC3 в трее (StatusNotifierItem через Qt) и его меню (бриф №8: окно + трей).
 
-Значок — по состоянию (view.tray_icon): подключён / заглушён / отключён / эфир / эфир + заглушён; картинки —
-`icons/png/` (их рисует design/panel/icons/draw.py + export.py). Готовые PNG Plasma не перекрашивает, поэтому
-вариант под тёмную или светлую панель выбирается по палитре приложения.
+Значок — по состоянию (view.tray_icon): подключён / заглушён / отключён / эфир / эфир + заглушён. Сначала — из темы
+значков: `opensc3-<состояние>` (SVG в стиле current-color-scheme кладёт `sc3 install` или пакет). Такой значок трей
+получает по имени, и Plasma сама перекрашивает его под панель. Нет в теме (не поставлено) — картинки `icons/png/`
+(их рисует design/panel/icons/draw.py + export.py): готовые PNG Plasma не перекрашивает, поэтому вариант под тёмную
+или светлую панель выбирается по палитре приложения.
 """
 from __future__ import annotations
 
@@ -19,6 +21,13 @@ from . import view
 
 PNG = Path(__file__).resolve().parent / "icons" / "png"
 SIZES = (22, 32)
+THEME_NAME = "opensc3-{}"  # имя в теме значков (opensc3/install.py)
+
+
+def theme_icon(name: str) -> QIcon | None:
+    """Значок `name` из темы значков или None, если его там нет."""
+    themed = THEME_NAME.format(name)
+    return QIcon.fromTheme(themed) if QIcon.hasThemeIcon(themed) else None
 
 
 def icon_files(name: str, theme: str) -> list[tuple[Path, int]]:
@@ -67,9 +76,11 @@ class Tray(QObject):
     def _icon(self, name: str) -> QIcon:
         key = (name, panel_theme())
         if key not in self._icons:
-            icon = QIcon()
-            for path, size in icon_files(*key):
-                icon.addFile(str(path), QSize(size, size))
+            icon = theme_icon(name)
+            if icon is None:
+                icon = QIcon()
+                for path, size in icon_files(*key):
+                    icon.addFile(str(path), QSize(size, size))
             self._icons[key] = icon
         return self._icons[key]
 

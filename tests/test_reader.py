@@ -32,7 +32,7 @@ class Reader(unittest.TestCase):
         self.assertAlmostEqual(st.mic.fader, 2112 / 4092)
         self.assertIs(st.mic.muted, False)  # громкость > 0 — не заглушено; флаг mute в 0x07 не значит ничего
         self.assertFalse(st.mic.muted_guess)
-        self.assertIsNone(st.mic.trim_db)
+        self.assertEqual(st.mic.trim_db, 0.0)   # 0xAC: 4096 = 0 дБ (поправка MIC, читается в наборе)
         self.assertAlmostEqual(st.line_in.fader, 16 / 31)
         self.assertIs(st.line_in.muted, False)  # MUTE LINE IN тоже обнуляет громкость, а она > 0
         self.assertIsNone(st.mic_monitor)
@@ -42,7 +42,7 @@ class Reader(unittest.TestCase):
     def test_minimum_reads_only(self):
         t = fake()
         read_state(Sc3(t), now=0)
-        self.assertEqual([f[2] for f in t.sent], [0x00, 0x02, 0x07, 0xB6, 0x85, 0x86])
+        self.assertEqual([f[2] for f in t.sent], [0x00, 0x02, 0x07, 0xB6, 0x85, 0x86, 0xAC])
         self.assertTrue(all(f[3] == 0 for f in t.sent), "только чтения (LEN = 0)")
 
     def test_muted_zero_is_just_zero(self):

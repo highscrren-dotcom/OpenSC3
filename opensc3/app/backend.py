@@ -14,6 +14,13 @@
   переподключения). «Обновить» не добавляет чтений: узлы голосов и ELECTRIC занимают ближайшие слоты;
 - **окно скрыто** — полный набор `read_state` по событию (старт, переподключение), не чаще раза в 5 с.
 Причина, по которой SC3 сейчас не читается, — `AppState.acp_note` (видна в шапке).
+
+Запись (ручка-поправка MIC, `mic.trim`; решения 4 и 9, docs/WRITE.md) — только в идущем опросе, в том же потоке и
+той же сессии SC3: значение ручки ждёт ближайшего слота (новое заменяет старое — пишется последнее), и слот вместо
+чтения отдаётся `write.apply` (`ControlWorker._write_trim` — единственное место окна, где он зовётся). Внутри сеанса
+каждое обращение к SC3 — типы узлов, снимок, кадр, чтение назад — занимает свой слот 0,5 с (`Sc3.pace`), перед
+сеансом и перед кадром OBS спрашивается заново. Журнал — общий с CLI `writes.jsonl` (`sc3 undo` видит запись окна).
+Предохранитель «Разрешить запись в SC3» (меню-шестерёнка) по умолчанию выключен и хранится в настройках окна.
 """
 from __future__ import annotations
 
@@ -34,10 +41,12 @@ from PySide6.QtCore import (
     Slot,
 )
 
+from opensc3 import reader as R
 from opensc3.model import AppState, AudioState, Link, Live, Sc3State
+from opensc3.write import TRIM_DB
 
 from . import poll, view
-from .core import Core, OpenFailed
+from .core import WRITE_KEY, Core, OpenFailed
 
 log = logging.getLogger("opensc3.app")
 
@@ -51,6 +60,9 @@ NOTE_HOLD_MS = 5000     # сколько видна разовая причин�
 # автоматические поводы сливаются (старт + показ окна + подключение — один набор).
 WHY_START, WHY_CONNECT, WHY_SHOW, WHY_USER = "start", "connect", "show", "user"
 
+WRITE_OFF = "Запись в SC3 выключена — включите в настройках"
+TRIM_WHAT = "window mic.trim"   # `what` в журнале записи: так `sc3 undo` называет сеанс окна
+
 
 class ControlWorker(QObject):
     """Поток «sc3-control»: всё, что трогает SC3 (ACP) или спрашивает OBS."""
@@ -60,10 +72,12 @@ class ControlWorker(QObject):
     readStarted = Signal()
     readDone = Signal(object, str)        # Sc3State, что пошло не так («» — ничего)
     readRefused = Signal(str, str)        # причина, повод
-    polled = Signal(object)               # dict: поля Sc3State из очередного чтения опроса
+    polled = Signal(object)               # dict: поля Sc3State из очередного чтения опроса (poll.merge)
     pollChanged = Signal(bool, str)       # опрос идёт?, почему нет («» — без замечаний)
+    trimDone = Signal(float, object, str)  # просили (дБ), прочитано назад (дБ | None), что не так («» — ничего)
 
-    def __init__(self, core: Core, live_interval: float, full_set_first: bool = True) -> None:
+    def __init__(self, core: Core, live_interval: float, full_set_first: bool = True,
+                 write_enabled: bool = False) -> None:
         super().__init__()
         self._core = core
         self._live_interval = live_interval
@@ -83,6 +97,10 @@ class ControlWorker(QObject):
         self._k = 0
         self._fails = 0
         self._blocked = ""   # почему опрос выключен до переподключения SC3
+        # запись из окна: ручка-поправка MIC
+        self._write_enabled = write_enabled
+        self._trim_want: float | None = None   # последнее значение ручки, ждёт слота (значения сливаются)
+        self._trim_since = -math.inf            # просьбы до этой неудачи — мимо: ручка уже вернулась к прочитанному
 
     def _every(self, seconds: float, slot) -> None:
         t = QTimer(self)
@@ -141,6 +159,7 @@ class ControlWorker(QObject):
         self._update_poll()
 
     def _live_status(self) -> tuple[Live, float | None]:
+        """Свежий статус эфира из OBS (ошибка — UNKNOWN, то есть как в эфире); его видит и интерфейс."""
         try:
             live, since = self._core.live_status()
         except Exception as e:  # noqa: BLE001 — не знаем, значит как в эфире
@@ -233,7 +252,7 @@ class ControlWorker(QObject):
             return  # следующая попытка — на ближайшем тике статуса эфира
         # Первые слоты — полный набор (по одному чтению на слот), если его разрешает правило полных наборов
         # (раз в 5 с, отметка общая с CLI); иначе — сразу круг 07/07/07/B6 (окно только что спрятали и показали).
-        full = self._full_set_first and not self._guard.check(live)
+        full = self._full_set_first and not self._guard.check(live)  # поправка MIC — в любом случае, первой
         self._guard.mark_poll()  # verify() читает 0x00 — это первый слот
         try:
             session = self._core.open_sc3()
@@ -250,7 +269,7 @@ class ControlWorker(QObject):
             return
         if full:
             self._guard.mark()
-        self._session, self._plan = session, poll.Plan(full)
+        self._session, self._plan = session, poll.Plan(full, trim=True)
         self._t0 = self._last = time.monotonic()
         self._k, self._fails = 0, 0
         self.polled.emit({"link": Link.CONNECTED, "firmware": "V22", "read_at": time.time()})
@@ -277,6 +296,11 @@ class ControlWorker(QObject):
             else:  # слот раньше разрешённого (прошлое чтение началось позже своего слота): подождать остаток
                 self._at = self._last + poll.POLL_INTERVAL
                 self._arm()
+            return
+        if self._trim_want is not None:  # слот — записи: значение ручки ждало его
+            self._write_trim()
+            if self._session is not None:
+                self._schedule()
             return
         ctrl = self._plan.next()
         self._guard.mark_poll()
@@ -310,6 +334,8 @@ class ControlWorker(QObject):
     def _stop_poll(self, note: str) -> None:
         if self._session is None:
             return
+        if self._trim_want is not None:
+            self._drop_trim(note or self._poll_unwanted() or "опрос SC3 остановлен")
         if self._slot_timer is not None:
             self._slot_timer.stop()
         session, self._session = self._session, None
@@ -319,6 +345,103 @@ class ControlWorker(QObject):
             log.warning("закрытие SC3: %s", e)
         self._guard.mark()  # SC3 опрашивали: CLI после окна выждет интервал полных наборов
         self.pollChanged.emit(False, note)
+
+    # --- запись: ручка-поправка MIC -------------------------------------------------------------------
+
+    @Slot(bool)
+    def set_write_enabled(self, enabled: bool) -> None:
+        """Предохранитель записи (меню окна). Выключили — ждущее значение ручки не пишется."""
+        self._write_enabled = enabled
+        if not enabled and self._trim_want is not None:
+            self._drop_trim("запись в SC3 выключена")
+
+    @Slot(float, float)
+    def want_trim(self, db: float, asked_at: float) -> None:
+        """Ручка-поправка MIC: значение ждёт ближайшего слота опроса; новое заменяет старое (пишется последнее).
+        `asked_at` — time.monotonic() просьбы: просьбы, отправленные до неудачи записи, уже не нужны."""
+        if asked_at < self._trim_since:
+            return
+        if why := self._trim_unwanted():
+            self.trimDone.emit(db, None, f"поправка MIC не записана: {why}")
+            return
+        self._trim_want = db
+
+    def _trim_unwanted(self) -> str:
+        """«» — писать поправку можно (предохранитель включён, SC3 опрашивается, эфира нет); иначе — почему нет."""
+        if not self._write_enabled:
+            return WRITE_OFF
+        if self._session is None:
+            return self._poll_unwanted() or "SC3 сейчас не опрашивается"
+        if self._live is not Live.OFF:
+            return "эфир"
+        return ""
+
+    def _drop_trim(self, why: str) -> None:
+        db, self._trim_want = self._trim_want, None
+        self.trimDone.emit(db, None, f"поправка MIC не записана: {why}")
+
+    def _write_trim(self) -> None:
+        """Слот опроса — записи поправки MIC. ЕДИНСТВЕННОЕ место окна, где зовётся `write.apply` (сторож:
+        tests/test_safety.py), и тот же путь, что у `sc3 set mic.trim … --write`: белый список, эфир (OBS спрашивается
+        заново перед сеансом и перед кадром — `_live_before_acp`), verify и типы узлов, снимок «до», один кадр,
+        чтение назад, откат при расхождении, журнал `writes.jsonl` (`sc3 undo` его видит). Темп общий с опросом:
+        каждое обращение сеанса к SC3 ждёт свой слот (`Sc3.pace` → `_pace`), так что вместе с опросом — не больше
+        одного обращения за 0,5 с. Поток при этом занят (~1,5 с): опрос ждёт, пачки после не бывает."""
+        from opensc3 import write as W
+        db, self._trim_want = self._trim_want, None
+        if why := self._trim_unwanted():
+            self.trimDone.emit(db, None, f"поправка MIC не записана: {why}")
+            return
+        session = self._session
+        journal = W.Journal(self._core.journal_path(), what=TRIM_WHAT)
+        session.pace = self._pace
+        try:
+            res = W.apply(session, W.plan_write([("mic.trim", db)]), live=self._live_before_acp,
+                          guard=poll.WriteGuard(self._guard), journal=journal)
+        except W.WriteRefused as e:  # эфир: ни одного кадра записи
+            self._trim_failed(db, f"поправка MIC не записана: {e}", reread=False)
+        except W.WriteError as e:    # не сошлось чтение назад (откат уже сделан), журнал, типы узлов…
+            self._trim_failed(db, f"поправка MIC не записана: {e}")
+        except Exception as e:  # noqa: BLE001 — сбой транспорта и прочее: показать, ручку вернуть, поток жив
+            log.warning("запись поправки MIC: %s", e)
+            self._trim_failed(db, f"поправка MIC не записана: {e}")
+        else:
+            back = next((d.readback for d in res.done if d.write.param.key == "mic.trim"), None)
+            if back is None:  # писать было нечего: в SC3 уже так
+                back = W.target("mic.trim", db).value
+            got = R.mic_trim([0, 0, back])
+            self.polled.emit({"mic_trim": got, "read_at": time.time()})
+            self.trimDone.emit(db, got, "")
+        finally:
+            session.pace = None
+        self._update_poll()  # эфир, увиденный перед кадром, закрывает SC3 сразу, а не на тике статуса
+
+    def _trim_failed(self, db: float, note: str, reread: bool = True) -> None:
+        """Запись не прошла: ждущие значения — мимо, поправку — перечитать в ближайшем слоте (ручка вернётся к
+        прочитанному)."""
+        self._trim_want = None
+        self._trim_since = time.monotonic()
+        if reread and self._plan is not None:
+            self._plan.retry(R.MIC_TRIM)
+        self.trimDone.emit(db, None, note)
+
+    def _live_before_acp(self) -> Live:
+        """Статус эфира для `write.apply`: сначала дождаться своего слота, потом спросить OBS заново — ответ свежий
+        прямо перед обращением к SC3 (правило 3), а не до паузы."""
+        self._wait_slot()
+        return self._live_status()[0]
+
+    def _wait_slot(self) -> None:
+        left = self._last + poll.POLL_INTERVAL - time.monotonic()
+        if left > 0:
+            time.sleep(left)
+
+    def _pace(self) -> None:
+        """`Sc3.pace` на время сеанса записи: обращение к SC3 — не раньше 0,5 с после прошлого (чтения опроса или
+        обращения записи), слот отмечается в гварде так же, как чтение опроса."""
+        self._wait_slot()
+        self._guard.mark_poll()
+        self._last = time.monotonic()
 
 
 class AudioWorker(QObject):
@@ -458,6 +581,8 @@ class Backend(QObject):
     _muteRequest = Signal(bool)
     _meterRequest = Signal(bool)
     _rescanRequest = Signal()
+    _trimRequest = Signal(float, float)   # дБ, time.monotonic() просьбы
+    _writeEnabledRequest = Signal(bool)
 
     # --- свойства для QML: SC3
     link = _prop("link", str, stateChanged)
@@ -475,8 +600,10 @@ class Backend(QObject):
     electricKey = _prop("electricKey", str, stateChanged)
     voice = _prop("voice", str, stateChanged)
     customLit = _prop("customLit", str, stateChanged)
-    trimMic = _prop("trimMic", float, stateChanged)
+    trimMic = _prop("trimMic", float, stateChanged)            # просьба ручки, пока не подтверждена; потом — чтение
+    trimMicPending = _prop("trimMicPending", bool, stateChanged)  # значение ручки ещё пишется
     trimLineIn = _prop("trimLineIn", float, stateChanged)
+    writeEnabled = _prop("writeEnabled", bool, stateChanged)   # предохранитель «Разрешить запись в SC3»
     unknown = _prop("unknown", "QVariantMap", stateChanged)
     guess = _prop("guess", "QVariantMap", stateChanged)   # клавиша горит по догадке (Channel.muted_guess)
     dsp = _prop("dsp", "QVariantMap", stateChanged)
@@ -512,12 +639,15 @@ class Backend(QObject):
         self._note_is_live = False
         self._levels = (0.0, 0.0)
         self._levels_t = time.monotonic()
+        self._settings = core.settings()
+        self._write_enabled = bool(self._settings.value(WRITE_KEY, False, type=bool))
+        self._trim_target: float | None = None   # значение ручки MIC, ещё не подтверждённое чтением назад
         self._props = self._compute()
         self._started = False
 
         self._control_thread = QThread(self)
         self._control_thread.setObjectName("sc3-control")
-        self._control = ControlWorker(core, live_interval, full_set_first)
+        self._control = ControlWorker(core, live_interval, full_set_first, self._write_enabled)
         self._control.moveToThread(self._control_thread)
         self._control_thread.started.connect(self._control.init)
         self._control.probed.connect(self._on_probed)
@@ -527,9 +657,12 @@ class Backend(QObject):
         self._control.readRefused.connect(self._on_read_refused)
         self._control.polled.connect(self._on_polled)
         self._control.pollChanged.connect(self._on_poll_changed)
+        self._control.trimDone.connect(self._on_trim_done)
         self._readRequest.connect(self._control.read)
         self._visibleRequest.connect(self._control.set_visible)
         self._pollRefresh.connect(self._control.refresh_poll)
+        self._trimRequest.connect(self._control.want_trim)
+        self._writeEnabledRequest.connect(self._control.set_write_enabled)
 
         self._audio_thread = QThread(self)
         self._audio_thread.setObjectName("sc3-audio")
@@ -616,12 +749,68 @@ class Backend(QObject):
     def _mute_route(self) -> str:
         """ЕДИНСТВЕННОЕ место, где решается, чем глушить микрофон (решение 8).
 
-        Записи в SC3 пока нет (решение 4), поэтому сейчас всегда «pipewire» — mute источника SC3 в PipeWire,
-        и в эфире, и вне его. С этапом записи: вне эфира (`self._state.live is Live.OFF`) — «sc3», аппаратный
-        Mute (клавиша на корпусе загорится; кадр — через модуль записи с его белым списком и проверкой эфира),
-        в эфире — по-прежнему «pipewire».
+        Аппаратного Mute в белом списке записи нет (решение 4), поэтому сейчас всегда «pipewire» — mute источника
+        SC3 в PipeWire, и в эфире, и вне его. Когда (и если) владелец разрешит эту категорию: вне эфира
+        (`self._state.live is Live.OFF`) — «sc3», аппаратный Mute (клавиша на корпусе загорится; кадр — через
+        модуль записи с его белым списком и проверкой эфира), в эфире — по-прежнему «pipewire».
         """
         return "pipewire"
+
+    # --- запись: предохранитель и ручка-поправка MIC ---------------------------------------------------
+
+    @Slot(bool)
+    def setWriteEnabled(self, enabled: bool) -> None:
+        """Предохранитель «Разрешить запись в SC3» (меню-шестерёнка в шапке): по умолчанию выключен, хранится в
+        настройках окна. Выключили — ждущее значение ручки не пишется."""
+        enabled = bool(enabled)
+        if enabled == self._write_enabled:
+            return
+        self._write_enabled = enabled
+        self._settings.setValue(WRITE_KEY, enabled)
+        sync = getattr(self._settings, "sync", None)
+        if sync is not None:
+            sync()
+        self._writeEnabledRequest.emit(enabled)
+        if not enabled:
+            self._trim_target = None
+        self._publish()
+
+    @Slot(float)
+    def setMicTrim(self, db: float) -> None:
+        """Ручка-поправка MIC (бриф №5): новое значение, дБ (шаг 0,5, границы белого списка). Пишет рабочий поток в
+        ближайшем слоте опроса через `write.apply`; значения сливаются — пишется последнее. Пока запись не
+        подтверждена чтением назад, ручка показывает просьбу (`trimMicPending`); не сошлось — вернётся к
+        прочитанному, причина — в шапке."""
+        if why := self._trim_refusal():
+            self._set_note(why, live=False)
+            return
+        db = poll.trim_step(float(db), *TRIM_DB)
+        self._trim_target = db
+        self._trimRequest.emit(db, time.monotonic())
+        self._publish()
+
+    def _trim_refusal(self) -> str:
+        """«» — ручку MIC можно крутить; иначе — почему нет (то же решает рабочий поток и сам write.apply)."""
+        st = self._state
+        if not self._write_enabled:
+            return WRITE_OFF
+        if st.live is not Live.OFF:
+            return "идёт эфир — изменения выключены" if st.live is Live.ON else "эфир не определён — изменения выключены"
+        if st.sc3.link is not Link.CONNECTED:
+            return "SC3 не на связи — поправку не записать"
+        if st.sc3.mic.trim_db is None:
+            return "поправка MIC ещё не прочитана"
+        if not self._polling:
+            return "SC3 сейчас не опрашивается — поправку не записать"
+        return ""
+
+    def _on_trim_done(self, want: float, got: float | None, note: str) -> None:
+        if note:  # не записано: ручка — к прочитанному значению, причина — в шапке
+            self._trim_target = None
+            self._set_note(note, live=False)
+        elif self._trim_target == want:  # подтверждено чтением назад (новую просьбу ещё ждём — её не трогаем)
+            self._trim_target = None
+            self._publish()
 
     # --- чтения SC3 -----------------------------------------------------------------------------------
 
@@ -680,7 +869,7 @@ class Backend(QObject):
     def _on_polled(self, update: dict) -> None:
         if self._probe_link is not Link.CONNECTED:
             return
-        self._state = replace(self._state, sc3=replace(self._state.sc3, **update))
+        self._state = replace(self._state, sc3=poll.merge(self._state.sc3, update))
         self._publish()
 
     def _on_poll_changed(self, active: bool, note: str) -> None:
@@ -701,6 +890,7 @@ class Backend(QObject):
         self._probe_link = link
         if link is not Link.CONNECTED:
             # Нет на шине или нет прав: прежние значения уже не про это устройство.
+            self._trim_target = None
             self._state = replace(self._state, sc3=Sc3State(link=link))
             self._publish()
         elif prev is not Link.CONNECTED:
@@ -766,6 +956,10 @@ class Backend(QObject):
         props["busy"] = self._busy
         props["polling"] = self._polling
         props["levelIn"], props["levelOut"] = self._levels
+        props["writeEnabled"] = self._write_enabled
+        props["trimMicPending"] = self._trim_target is not None
+        if self._trim_target is not None:
+            props["trimMic"] = self._trim_target
         return props
 
     def _publish(self) -> None:

@@ -13,6 +13,7 @@ Rectangle {
     property string forcedTip: ""      // mock-ups: tooltip shown without hover
     property string forcedFocus: ""    // mock-ups: element drawn with keyboard focus
     property bool profileOpen: false
+    property bool settingsOpen: false    // the header gear's menu (write fuse)
     property int forcedProfileHover: -1  // mock-ups: profile menu row drawn as hovered
 
     // Section whose drawer is on screen: kept while the drawer slides back in.
@@ -102,8 +103,10 @@ Rectangle {
 
     TrimStrip {
         id: strip
+        z: 1   // its tooltips rise over the panel's bottom edge
         theme: tokens
         sc3: win.sc3
+        forcedTip: win.forcedTip
         panelW: panel.width
         panelX: 22
         x: panel.x + 22
@@ -169,15 +172,26 @@ Rectangle {
         width: parent.width
         profileOpen: win.profileOpen
         profileHover: win.forcedProfileHover
-        onProfileClicked: win.profileOpen = !win.profileOpen
+        settingsOpen: win.settingsOpen
+        onProfileClicked: {
+            win.settingsOpen = false;
+            win.profileOpen = !win.profileOpen;
+        }
+        onSettingsClicked: {
+            win.profileOpen = false;
+            win.settingsOpen = !win.settingsOpen;
+        }
         onRefreshClicked: win.sc3.refresh()
     }
 
-    // A click anywhere else closes the profile menu.
+    // A click anywhere else closes the open menu.
     MouseArea {
         z: 4
         anchors.fill: parent
-        visible: win.profileOpen
-        onClicked: win.profileOpen = false
+        visible: win.profileOpen || win.settingsOpen
+        onClicked: {
+            win.profileOpen = false;
+            win.settingsOpen = false;
+        }
     }
 }

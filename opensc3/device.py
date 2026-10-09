@@ -2,10 +2,15 @@
 
 Порядок обязателен: `verify()` (дескриптор интерфейса 4 → сборка прошивки) — и лишь потом остальные чтения.
 Чужая сборка — отказ: адреса и смысл узлов у другой версии могут отличаться.
+
+Темп (`pace`): владелец сессии может задать общий темп обращений к ACP. `turn()` зовётся перед каждым обращением —
+чтением здесь (`_transact`) и кадром записи (`write._send`). Окно так ставит каждое обращение сеанса записи в свой
+слот лёгкого опроса (не больше одного обращения за 0,5 с вместе с опросом, решение 9); CLI темп не задаёт.
 """
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 
 from . import protocol as P
 from .protocol import Sc3Busy
@@ -22,6 +27,7 @@ class Sc3:
         self.descriptor: bytes | None = None
         self.version: bytes | None = None
         self._verified = False
+        self.pace: Callable[[], None] | None = None  # общий темп: ждать своей очереди к ACP (см. описание модуля)
 
     @classmethod
     def open(cls, factory=None) -> Sc3:
@@ -68,7 +74,14 @@ class Sc3:
 
     # -- чтения ----------------------------------------------------------------------------------------
 
+    def turn(self) -> None:
+        """Перед обращением к ACP (одно обращение — с повторами внутри): дождаться очереди по темпу `pace`.
+        Без темпа — сразу."""
+        if self.pace is not None:
+            self.pace()
+
     def _transact(self, frame: bytes, echo: int | None = None) -> bytes | None:
+        self.turn()
         for _ in range(self.RETRIES + 1):
             self.t.set_output(frame)
             time.sleep(self.DELAY)

@@ -1,11 +1,14 @@
 """Ядро глазами окна: одна дверь к SC3 (ACP), OBS, PipeWire и hotplug. Бэкенд зовёт только этот протокол;
-тесты и `--fake` подставляют подделку (`fake.py`), настоящее ядро — `RealCore`.
+тесты и `--fake` подставляют подделку (`fake.py`), настоящее ядро — `RealCore`. Отсюда же — хранилище настроек окна
+и журнал записи: у подделки они в памяти, чтобы `--fake` и тесты не трогали настройки и журнал владельца
+(`sc3 undo` иначе увидел бы поддельную запись).
 
 Все методы блокирующие и вызываются только из рабочих потоков бэкенда (backend.py), не из потока интерфейса.
 Модули ядра импортируются лениво: окно и подделка работают и там, где части ядра нет.
 """
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any, Protocol
 
 from opensc3.model import Link, Live, Sc3State
@@ -14,6 +17,8 @@ from opensc3.protocol import Sc3Busy  # чистый модуль без зав�
 LIVE_TIMEOUT = 1.0     # obs.live_status: дольше секунды не ждём
 ACP_MIN_INTERVAL = 5.0  # AcpGuard: набор чтений не чаще раза в 5 с (правило 4)
 SC3_BUSY = Sc3Busy.TEXT  # тот же текст печатает и CLI
+SETTINGS_ORG = SETTINGS_APP = "opensc3"
+WRITE_KEY = "write/enabled"   # предохранитель «Разрешить запись в SC3» (по умолчанию выключен)
 
 
 class OpenFailed(Exception):
@@ -44,10 +49,20 @@ class Meter(Protocol):
 
 
 class Session(Protocol):
-    """SC3, открытый для лёгкого опроса (решение 9): verify() уже пройден, интерфейс держится до close()."""
+    """SC3, открытый для лёгкого опроса (решение 9): verify() уже пройден, интерфейс держится до close(). Это
+    `device.Sc3` целиком: запись окна отдаёт его `write.apply` (там нужны ещё `types`, `node`, `turn` и `pace`)."""
+
+    pace: Any  # общий темп: окно ставит сюда ожидание слота на время сеанса записи (device.Sc3)
 
     def read(self, ctrl: int) -> bytes | None: ...   # одно чтение ACP (с повторами внутри Sc3); None — не ответил
     def close(self) -> None: ...
+
+
+class Settings(Protocol):
+    """Как QSettings: настройки окна между запусками (предохранитель записи)."""
+
+    def value(self, key: str, default: Any = None, type: Any = None) -> Any: ...  # `type` — как у QSettings
+    def setValue(self, key: str, value: Any) -> None: ...
 
 
 class Core(Protocol):
@@ -63,6 +78,8 @@ class Core(Protocol):
     def get_mute(self, nodes: Any) -> bool | None: ...         # mute источника SC3 (голос в ПК)
     def set_mute(self, nodes: Any, muted: bool) -> None: ...
     def meter(self, nodes: Any) -> Meter: ...
+    def settings(self) -> Settings: ...                        # настройки окна (QSettings владельца)
+    def journal_path(self) -> Path | None: ...                 # журнал записи (общий с `sc3 undo`); None — в памяти
 
 
 def source_id(nodes: Any) -> int:
@@ -132,3 +149,11 @@ class RealCore:
     def meter(self, nodes: Any) -> Meter:
         from opensc3 import pipewire
         return pipewire.LevelMeter(nodes)
+
+    def settings(self) -> Settings:
+        from PySide6.QtCore import QSettings
+        return QSettings(SETTINGS_ORG, SETTINGS_APP)  # ~/.config/opensc3/opensc3.conf
+
+    def journal_path(self) -> Path | None:
+        from opensc3.write import default_journal
+        return default_journal()  # тот же writes.jsonl, что у CLI: `sc3 undo` видит запись окна

@@ -1,0 +1,63 @@
+# Maintainer: s1dd1
+# Черновик пакета из git (packaging/arch/README.md). В AUR пока нет.
+
+pkgname=opensc3-git
+_repo=OpenSC3
+pkgver=r3.715665e
+pkgrel=1
+pkgdesc='Open Linux control panel for the fifine AmpliGame SC3 USB mixer (unofficial)'
+arch=(any)
+url='https://github.com/highscrren-dotcom/OpenSC3'
+license=(MIT)
+depends=(python pyside6 qt6-declarative libusb pipewire wireplumber)
+makedepends=(python-build python-installer python-setuptools python-wheel git)
+optdepends=('python-evdev: SC3 buttons (sc3 listen)'
+            'python-pyudev: SC3 hotplug events'
+            'python-websockets: OBS on-air status'
+            'kirigami: settings pages (planned)')
+provides=(opensc3)
+conflicts=(opensc3)
+source=("git+https://github.com/highscrren-dotcom/OpenSC3.git")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "$_repo"
+  # С метками v<версия> — <версия>.r<N>.g<хеш>; пока меток нет — r<число коммитов>.<хеш>
+  ( set -o pipefail
+    git describe --long --tags --abbrev=7 2>/dev/null | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g' ||
+    printf 'r%s.%s' "$(git rev-list --count HEAD)" "$(git rev-parse --short=7 HEAD)"
+  )
+}
+
+build() {
+  cd "$_repo"
+  python -m build --wheel --no-isolation
+}
+
+check() {
+  cd "$_repo"
+  # Без железа, OBS и PipeWire; окно — на офскрине (тесты пропускают Qt, если его нет)
+  python -B -m unittest discover -s tests -t .
+}
+
+package() {
+  cd "$_repo"
+  python -m installer --destdir="$pkgdir" dist/*.whl
+
+  # Доступ к SC3 (uaccess) — правило в /usr/lib: /etc/udev/rules.d с тем же именем его перекрывает
+  install -Dm644 udev/70-fifine-sc3.rules "$pkgdir/usr/lib/udev/rules.d/70-fifine-sc3.rules"
+  install -Dm644 data/opensc3.desktop "$pkgdir/usr/share/applications/opensc3.desktop"
+  install -Dm644 data/opensc3.svg "$pkgdir/usr/share/icons/hicolor/scalable/apps/opensc3.svg"
+
+  # Значки трея: sc3-<состояние>-<px>.svg → hicolor/<px>x<px>/status/opensc3-<состояние>.svg (как sc3 install)
+  local icon px state
+  for icon in opensc3/app/icons/sc3-*-22.svg opensc3/app/icons/sc3-*-32.svg; do
+    px=${icon##*-}
+    px=${px%.svg}
+    state=${icon##*/sc3-}
+    state=${state%-"$px".svg}
+    install -Dm644 "$icon" "$pkgdir/usr/share/icons/hicolor/${px}x${px}/status/opensc3-$state.svg"
+  done
+
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

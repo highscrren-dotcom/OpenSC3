@@ -2,11 +2,10 @@
 import itertools
 import struct
 import unittest
-from dataclasses import replace
 
 from opensc3 import reader as R
 from opensc3.app import poll
-from opensc3.app.fake import FakeCore, FakeSession
+from opensc3.app.fake import FakeCore
 from opensc3.device import Sc3
 from opensc3.model import Sc3State
 from tests.fake import FakeTransport
@@ -77,7 +76,8 @@ class Grid(unittest.TestCase):
 
 class Parse(unittest.TestCase):
     def setUp(self):
-        self.session = FakeSession(FakeCore())
+        self.session = FakeCore().open_sc3()   # настоящий Sc3 поверх поддельного транспорта, verify пройден
+        self.addCleanup(self.session.close)
 
     def test_values_through_reader(self):
         plan = poll.Plan()
@@ -89,6 +89,31 @@ class Parse(unittest.TestCase):
         self.assertAlmostEqual(got["line_in"].fader, 16 / 31)
         self.assertEqual((got["electric_key"], got["voice"]), ("C", ""))
         self.assertAlmostEqual(got["dsp_load"], 0.86)
+        self.assertEqual(got["mic_trim"], 0.0)   # 0xAC: 4096 = 0 дБ
+
+    def test_mic_trim_and_merge(self):
+        """0xAC → поправка MIC в дБ; чтение 0x07 канал Mic заменяет, а поправку оставляет."""
+        plan = poll.Plan()
+        up = plan.parse(R.MIC_TRIM, b"\xff" + struct.pack("<hhh", 1, 0, 5461))     # ≈ +2,5 дБ
+        self.assertAlmostEqual(up["mic_trim"], 2.5, places=2)
+        st = poll.merge(Sc3State(), up)
+        self.assertAlmostEqual(st.mic.trim_db, 2.5, places=2)
+        st = poll.merge(st, plan.parse(ADC, adc(20 * 132)))
+        self.assertAlmostEqual(st.mic.fader, 20 / 31)
+        self.assertAlmostEqual(st.mic.trim_db, 2.5, places=2)                       # чтение 0x07 её не стёрло
+        self.assertIsNone(plan.parse(R.MIC_TRIM, b"\xff" + struct.pack("<hhh", 1, 0, 0))["mic_trim"])
+        with self.assertRaises(poll.BadReply):
+            plan.parse(R.MIC_TRIM, b"\xff" + struct.pack("<hh", 1, 0))
+
+    def test_trim_first_and_not_in_cycle_or_refresh(self):
+        """Поправку MIC читаем первой в каждой сессии окна (и без полного набора), но ни в круге, ни в «Обновить»."""
+        self.assertEqual(poll.Plan(trim=True).queue, [R.MIC_TRIM, *(c for c in R.FULL_SET if c != R.MIC_TRIM)])
+        self.assertEqual(poll.Plan(full_set_first=False, trim=True).queue, [R.MIC_TRIM])
+        self.assertNotIn(R.MIC_TRIM, R.POLL_CYCLE)
+        self.assertNotIn(R.MIC_TRIM, poll.REFRESH)
+        self.assertEqual(poll.trim_step(2.26, -20, 10), 2.5)
+        self.assertEqual(poll.trim_step(-33, -20, 10), -20)
+        self.assertEqual(poll.trim_step(12.1, -20, 10), 10)
 
     def test_voice_from_pitch_alone(self):
         plan = poll.Plan()
@@ -132,7 +157,7 @@ class VirtualPoll(unittest.TestCase):
                 change(t)
                 changed = True
             ctrl = plan.next()
-            state = replace(state, **plan.parse(ctrl, sc3.read(ctrl), now=at))
+            state = poll.merge(state, plan.parse(ctrl, sc3.read(ctrl), now=at))
             seen.append((at, ctrl, state))
             last = at
             k, at = poll.next_slot(t0, k, at, last)   # чтение мгновенное: «сейчас» = начало слота

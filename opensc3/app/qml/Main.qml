@@ -11,6 +11,8 @@ Window {
     property bool closeToTray: false
     property alias section: content.section
     property alias animations: content.animations
+    property alias forcedTip: content.forcedTip        // --screenshot --tip
+    property alias settingsOpen: content.settingsOpen  // --screenshot --tip settings
     readonly property real designWidth: content.width
     readonly property real zoom: width / content.width
     readonly property real fullHeight: content.height * zoom
@@ -66,10 +68,12 @@ Window {
     Shortcut {
         sequence: "Esc"
         onActivated: {
-            if (content.profileOpen)
+            if (content.profileOpen || content.settingsOpen) {
                 content.profileOpen = false;
-            else
+                content.settingsOpen = false;
+            } else {
                 content.section = "";
+            }
         }
     }
 }

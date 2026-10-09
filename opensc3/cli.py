@@ -7,6 +7,9 @@
   sc3 listen [секунд]     что шлют кнопки: evdev (без захвата) + сырой hidraw + громкость PipeWire по умолчанию
   sc3 live                идёт ли эфир или запись в OBS (GetStreamStatus, GetRecordStatus) — к SC3 не обращается
   sc3 state               состояние для окна (JSON): эфир → разрешение на ACP → один набор чтений (8) + PipeWire
+  sc3 install [--autostart] [--dry-run]   ярлык, значки (и автозапуск в трей) в ~/.local/share — без sudo; udev —
+                          только проверка и команды для fish (install.py)
+  sc3 uninstall [--dry-run]               убрать ровно поставленное (по манифесту ~/.local/share/opensc3/installed.json)
 
 Запись (этап 3; по умолчанию — сухой прогон: план и кадры, к SC3 не обращается; отправка — только с --write):
   sc3 params              что можно писать: ключи белого списка, узлы, границы
@@ -39,6 +42,7 @@ BY_ID = Path("/dev/input/by-id")
 EVENT = BY_ID / "usb-MV-SILICON_fifine_SC3_20190808-event-if03"
 HIDRAW = BY_ID / "usb-MV-SILICON_fifine_SC3_20190808-if03-hidraw"
 RULE = Path("/etc/udev/rules.d/70-fifine-sc3.rules")
+SYSTEM_RULE = Path("/usr/lib/udev/rules.d/70-fifine-sc3.rules")  # так его ставит пакет (packaging/arch)
 REPO_RULE = Path(__file__).resolve().parent.parent / "udev" / "70-fifine-sc3.rules"
 
 
@@ -50,6 +54,11 @@ def _usb_dev() -> Path | None:
 def _rules(p: Path) -> list[str]:
     """Действующие строки правила udev — без комментариев и пустых строк."""
     return [ln.strip() for ln in p.read_text().splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+
+
+def _rule() -> Path | None:
+    """Действующее правило udev: /etc перекрывает /usr/lib (пакет) с тем же именем."""
+    return next((p for p in (RULE, SYSTEM_RULE) if p.exists()), None)
 
 
 def cmd_doctor(_a) -> int:
@@ -71,9 +80,10 @@ def cmd_doctor(_a) -> int:
         drv = dev / f"{dev.name}:1.{i}" / "driver"
         name = os.path.basename(os.readlink(drv)) if drv.exists() else "нет"
         print(f"  интерфейс {i}: драйвер {name}")
-    line(RULE.exists(), f"правило udev {RULE}", f"sudo install -m 644 {REPO_RULE} /etc/udev/rules.d/")
-    if RULE.exists() and REPO_RULE.exists():
-        line(_rules(RULE) == _rules(REPO_RULE), "правило совпадает с udev/ в репо (без комментариев)",
+    rule = _rule()
+    line(rule is not None, f"правило udev {rule or RULE}", f"sudo install -m 644 {REPO_RULE} /etc/udev/rules.d/")
+    if rule is not None and REPO_RULE.exists():
+        line(_rules(rule) == _rules(REPO_RULE), "правило совпадает с udev/ в репо (без комментариев)",
              "переустановить из репо и sudo udevadm control --reload")
     for p, what in ((EVENT, "кнопки (evdev)"), (HIDRAW, "кнопки (hidraw)")):
         line(p.exists() and os.access(p, os.R_OK), f"{what}: {p.name}",
@@ -389,7 +399,8 @@ def _write(plan, what: str, undoes: str | None = None) -> int:
     if res.done:
         print(f"записано кадров: {len(res.done)}; журнал: {journal.path}" +
               (f" — НЕ ДОПИСАН ({journal.broken}): исходные значения — в строках выше" if journal.broken else ""))
-        print("вернуть как было: sc3 undo --write; полный сброс — выдернуть USB (вне эфира)")
+        print("снова применить отменённое: sc3 undo --write" if undoes else "вернуть как было: sc3 undo --write",
+              end="; полный сброс — выдернуть USB (вне эфира)\n")
     return 0
 
 
@@ -467,6 +478,55 @@ def cmd_undo(a) -> int:
     return 0
 
 
+def _udev_check() -> None:
+    """Правило udev ставит владелец (sudo): `sc3 install` его только проверяет и печатает команды для fish."""
+    import shlex
+    rule = _rule()
+    if rule is not None and (not REPO_RULE.exists() or _rules(rule) == _rules(REPO_RULE)):
+        print(f"✓ правило udev {rule}")
+        return
+    state = f"{rule} отличается от udev/ в репо" if rule else "не стоит"
+    print(f"✗ правило udev {state} — его ставит владелец (sudo), команды для fish:")
+    if REPO_RULE.exists():
+        print(f"    sudo install -m 644 {shlex.quote(str(REPO_RULE))} /etc/udev/rules.d/")
+    print("    sudo udevadm control --reload")
+    print("    sudo udevadm trigger --action=change --attr-match=idVendor=3142 --attr-match=idProduct=0c33")
+
+
+def _not_root() -> bool:
+    if os.geteuid() == 0:
+        print("✗ не под sudo: ставится в домашний каталог пользователя (~/.local, ~/.config)", file=sys.stderr)
+        return False
+    return True
+
+
+def cmd_install(a) -> int:
+    from . import install as I
+    if not _not_root():
+        return 1
+    try:
+        rc = I.install(I.plan(autostart=a.autostart), dry_run=a.dry_run)
+    except I.InstallError as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return 1
+    system = Path("/usr/share/applications/opensc3.desktop")
+    if rc == 0 and system.exists():
+        print(f"• есть и системный {system} (пакет): ярлык из ~/.local перекрывает его")
+    _udev_check()
+    return rc
+
+
+def cmd_uninstall(a) -> int:
+    from . import install as I
+    if not _not_root():
+        return 1
+    try:
+        return I.uninstall(I.manifest_path(), dry_run=a.dry_run)
+    except I.InstallError as e:
+        print(f"✗ {e}", file=sys.stderr)
+        return 1
+
+
 def _send_flags(p) -> None:
     g = p.add_mutually_exclusive_group()
     g.add_argument("--dry-run", action="store_true", help="только план и кадры (по умолчанию)")
@@ -503,6 +563,13 @@ def main(argv=None) -> int:
     un = sub.add_parser("undo")
     _send_flags(un)
     un.set_defaults(fn=cmd_undo)
+    ins = sub.add_parser("install", help="ярлык, значки, автозапуск — для пользователя, без sudo")
+    ins.add_argument("--autostart", action="store_true", help="ещё и автозапуск в трей (~/.config/autostart)")
+    ins.add_argument("--dry-run", action="store_true", help="только список: что и куда, ничего не пишет")
+    ins.set_defaults(fn=cmd_install)
+    uni = sub.add_parser("uninstall", help="убрать поставленное `sc3 install` (по манифесту)")
+    uni.add_argument("--dry-run", action="store_true", help="только список, ничего не удаляет")
+    uni.set_defaults(fn=cmd_uninstall)
     a = ap.parse_args(argv)
     if getattr(a, "write", False) and getattr(a, "source", None):
         ap.error("--from — только для сухого прогона: перед записью снимок снимается с самого SC3")

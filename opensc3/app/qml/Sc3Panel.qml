@@ -641,10 +641,10 @@ Item {
         }
         function rectOf(item) { return Qt.rect(item.x, item.y, item.width, item.height); }
         const mirror = "Это зеркало ползунка на корпусе — двигайте его на SC3.";
-        function drag(f, name) {
+        function drag(f, name, trim) {
             return { target: capRect(f), side: f.locked ? "left" : "right", title: name, lock: f.locked,
                      text: f.locked ? lockText + ": двигайте его на SC3,\nс ПК его не прочитать и не поменять"
-                                    : mirror + "\nПрограммная поправка — ручкой под панелью (появится с записью в SC3)" };
+                                    : mirror + "\n" + trim };
         }
         switch (id) {
         case "rgb": return { target: rectOf(padRgb), side: "left", title: "Подсветка RGB", text: lockText, lock: true };
@@ -673,8 +673,8 @@ Item {
                                      title: "MUTE LINE OUT", text: readOnly };
         case "fader-mic": return panel.known("faderMic") ? null : fader(faderMic, "Ползунок MIC");
         case "fader-linein": return panel.known("faderLineIn") ? null : fader(faderLineIn, "Ползунок LINE IN");
-        case "drag-mic": return drag(faderMic, "Ползунок MIC — зеркало");
-        case "drag-linein": return drag(faderLineIn, "Ползунок LINE IN — зеркало");
+        case "drag-mic": return drag(faderMic, "Ползунок MIC — зеркало", "Поправка в ПК — ручкой под панелью");
+        case "drag-linein": return drag(faderLineIn, "Ползунок LINE IN — зеркало", "Поправка LINE IN появится позже");
         case "drag-hp": return drag(faderHeadphone, "Ползунок HEADPHONE");
         case "drag-lo": return drag(faderLineOut, "Ползунок LINE OUT");
         case "fader-hp": return fader(faderHeadphone, "Ползунок HEADPHONE");

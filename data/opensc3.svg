@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64">
+  <!-- Значок приложения OpenSC3: корпус SC3 сверху (пропорция 164:113), четыре прорези и колпачки ползунков
+       в янтаре бренда (#FFB000 / #FFD27A / #5C3D00, design/BRIEF.md №3). Цвета постоянные: значок приложения
+       тема не перекрашивает (значки трея — opensc3/app/icons/, они в стиле current-color-scheme). -->
+  <defs>
+    <linearGradient id="body" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#43464c"/>
+      <stop offset="1" stop-color="#1c1d20"/>
+    </linearGradient>
+    <linearGradient id="cap" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd27a"/>
+      <stop offset="0.35" stop-color="#ffb000"/>
+      <stop offset="1" stop-color="#e09a00"/>
+    </linearGradient>
+  </defs>
+  <rect x="3" y="14.5" width="58" height="40" rx="7" fill="#000" opacity="0.28"/>
+  <rect x="3" y="12" width="58" height="40" rx="7" fill="url(#body)"/>
+  <rect x="3.5" y="12.5" width="57" height="39" rx="6.5" fill="none" stroke="#fff" stroke-opacity="0.12"/>
+  <rect x="3" y="12" width="58" height="40" rx="7" fill="none" stroke="#000" stroke-opacity="0.45" stroke-width="0.6"/>
+  <g fill="#0b0b0d">
+    <rect x="14.5" y="19" width="2" height="26" rx="1"/>
+    <rect x="25.5" y="19" width="2" height="26" rx="1"/>
+    <rect x="36.5" y="19" width="2" height="26" rx="1"/>
+    <rect x="47.5" y="19" width="2" height="26" rx="1"/>
+  </g>
+  <g fill="#000" opacity="0.35">
+    <rect x="11.5" y="28" width="8" height="5" rx="1.2"/>
+    <rect x="22.5" y="34" width="8" height="5" rx="1.2"/>
+    <rect x="33.5" y="22" width="8" height="5" rx="1.2"/>
+    <rect x="44.5" y="25" width="8" height="5" rx="1.2"/>
+  </g>
+  <g fill="url(#cap)">
+    <rect x="11.5" y="27" width="8" height="5" rx="1.2"/>
+    <rect x="22.5" y="33" width="8" height="5" rx="1.2"/>
+    <rect x="33.5" y="21" width="8" height="5" rx="1.2"/>
+    <rect x="44.5" y="24" width="8" height="5" rx="1.2"/>
+  </g>
+  <g fill="#5c3d00">
+    <rect x="12.5" y="29.25" width="6" height="0.75"/>
+    <rect x="23.5" y="35.25" width="6" height="0.75"/>
+    <rect x="34.5" y="23.25" width="6" height="0.75"/>
+    <rect x="45.5" y="26.25" width="6" height="0.75"/>
+  </g>
+</svg>

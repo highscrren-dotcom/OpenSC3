@@ -27,5 +27,11 @@ QtObject {
     readonly property string pencil: "M5 19l1-4 10-10 3 3-10 10z M14 7l3 3"
     // «Обновить»: a 315-degree clockwise arc with its arrowhead at the upper right.
     readonly property string refresh: "M19.5 12a7.5 7.5 0 1 1 -2.2 -5.3 M19.6 3.6v3.6h-3.6"
-    readonly property string question: "M9.2 9.2a2.9 2.9 0 1 1 4.1 2.6c-.8 .4 -1.3 1 -1.3 1.9v.8 M12 17.6v.1"
+    // Settings in the header: eight straight teeth around a ring.
+    readonly property string gear: "M9.84 4.92L10.44 2.12L13.56 2.12L14.16 4.92L15.47 5.47L17.88 3.91L20.09 6.12"
+        + "L18.53 8.53L19.08 9.84L21.88 10.44L21.88 13.56L19.08 14.16L18.53 15.47L20.09 17.88L17.88 20.09"
+        + "L15.47 18.53L14.16 19.08L13.56 21.88L10.44 21.88L9.84 19.08L8.53 18.53L6.12 20.09L3.91 17.88"
+        + "L5.47 15.47L4.92 14.16L2.12 13.56L2.12 10.44L4.92 9.84L5.47 8.53L3.91 6.12L6.12 3.91L8.53 5.47z "
+        + "M15 12a3 3 0 1 1 -6 0a3 3 0 1 1 6 0z"
+    readonly property string question:"M9.2 9.2a2.9 2.9 0 1 1 4.1 2.6c-.8 .4 -1.3 1 -1.3 1.9v.8 M12 17.6v.1"
 }

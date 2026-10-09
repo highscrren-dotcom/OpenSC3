@@ -2,9 +2,12 @@
 
 Повторяет договор `core.Core` и поведение настоящих модулей там, где оно важно окну: гвард — настоящий
 `opensc3.guard.AcpGuard` (без файла-отметки), набор чтений даёт то же, что умеет `reader.read_state`
-(ползунки Mic и Line In, Mute микрофона, ELECTRIC, «голос выкл.»; остальное — None), сессия опроса отдаёт тела
-ответов в раскладке SC3 (их разбирает настоящий `reader`), hotplug — канал `os.pipe()` под QSocketNotifier.
-Счётчики вызовов, моменты чтений и потоки — для тестов.
+(ползунки Mic и Line In, Mute микрофона, ELECTRIC, «голос выкл.», поправка MIC; остальное — None), сессия опроса —
+настоящий `device.Sc3` поверх поддельного транспорта (`FakeAcp`): verify, чтения и запись `write.apply` идут тем же
+кодом, что у настоящего, а тела ответов — в раскладке SC3 (их разбирает настоящий `reader`). Hotplug — канал
+`os.pipe()` под QSocketNotifier. Настройки и журнал записи — в памяти (`MemorySettings`, `journal = None`):
+`--fake` не трогает ни настройки окна владельца, ни его `writes.jsonl`. Счётчики вызовов, кадры, моменты чтений и
+потоки — для тестов.
 """
 from __future__ import annotations
 
@@ -13,12 +16,16 @@ import os
 import struct
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 
+from opensc3 import protocol as P
 from opensc3 import reader as R
+from opensc3 import write as W
+from opensc3.device import Sc3
 from opensc3.model import Channel, Link, Live, Sc3State
 
-from .core import SC3_BUSY, OpenFailed
+from .core import SC3_BUSY, WRITE_KEY, OpenFailed
 
 # Сценарии `python3 -m opensc3.app --fake <имя>`.
 SCENARIOS = {
@@ -32,7 +39,16 @@ SCENARIOS = {
     "no-access": "SC3 есть, но нет прав на USB-узел",
     "foreign": "сборка прошивки не V22",
     "error": "чтения ACP не проходят",
+    "write": "запись в SC3 разрешена (предохранитель включён), поправка MIC +2,5 дБ",
+    "write-onair": "как write, затем эфир: ручка-поправка под замком",
 }
+WRITE_SCENARIOS = ("write", "write-onair")   # предохранитель включён, поправка MIC уже +2,5 дБ
+# Дескриптор интерфейса 4 (синтетический, минимальный): вендорская страница, без Report ID, вход и выход по 256
+# байт — ровно то, что проверяет verify().
+DESC4 = bytes.fromhex("0600ff0901a101150026ff00750896000109018102960001090191 02c0".replace(" ", ""))
+TYPES = [30] * P.NODE_COUNT   # таблица типов узлов (0x80, индекс 0): синтетика, кроме узлов записи
+for _addr, _type in W.NODE_TYPES.items():
+    TYPES[_addr - P.NODE_MIN] = _type
 ON_AIR_FOR = 1 * 3600 + 23 * 60 + 45  # «1:23:45» — как в макете
 
 
@@ -99,22 +115,48 @@ def _node(*values: int) -> bytes:
     return b"\xff" + struct.pack(f"<{len(values)}h", *values)
 
 
-class FakeSession:
-    """SC3, открытый для опроса: тела ответов как у настоящего (синтетические числа, решение 5)."""
+class FakeAcp:
+    """Поддельный транспорт к интерфейсу 4 — как usb.LibusbTransport: кадр уходит (`set_output`, каждый проходит
+    protocol.check_frame), ответ забирается (`get_input`). Ответы — в раскладке SC3 (синтетические числа, решение 5).
+    Запись (LEN > 0) меняет узел и отвечает подтверждением `<узел> 00 …`, как в SDK; `core.trim_stuck` — запись
+    подтверждается, а значение не меняется (чтение назад не сойдётся). Каждый кадр — в `core.acp`, запись — ещё и
+    в `core.writes`. Состояние устройства живёт в подделке ядра (`core.sc3_nodes`) и переживает сессии."""
 
     def __init__(self, core: FakeCore) -> None:
         self.core = core
-        self.closed = False
+        self.last = bytes(P.REPORT)
 
-    def read(self, ctrl: int) -> bytes | None:
+    def claim(self) -> None:
+        pass
+
+    def report_descriptor(self) -> bytes:
+        return DESC4
+
+    def set_output(self, frame: bytes) -> None:
+        P.check_frame(frame)  # настоящий транспорт делает то же
         core = self.core
-        core.poll_reads.append((ctrl, time.monotonic(), threading.current_thread().name))
-        if self.closed:
-            raise AssertionError("чтение из закрытой сессии")
-        if core.fail_reads > 0:
-            core.fail_reads -= 1
-            return None
+        ctrl, ln = frame[2], frame[3]
+        core.acp.append((ctrl, ln, time.monotonic(), threading.current_thread().name))
+        if ln and ctrl != P.NAMES:                       # запись одного параметра: индекс = место в ответе чтения
+            idx, (value,) = frame[4], struct.unpack("<h", frame[5:7])
+            core.writes.append((ctrl, idx, value))
+            if not core.trim_stuck:
+                core.sc3_nodes[ctrl][idx] = value
+            self.last = bytes([ctrl]) + bytes(P.REPORT - 1)
+            return
+        body = self._body(frame)
+        if body is not None:  # иначе молчит — GET_REPORT отдаст прошлый ответ, как у настоящего
+            self.last = (frame[:3] + bytes([len(body)]) + body + b"\x16").ljust(P.REPORT, b"\0")
+
+    def _body(self, frame: bytes) -> bytes | None:
+        core, ctrl = self.core, frame[2]
         vol = 0 if core.hw_mute else core.mic_vol()   # MUTE на корпусе обнуляет громкость; флаг mute — всегда 0
+        if ctrl == 0x00:
+            return P.V22_VERSION
+        if ctrl == P.NAMES:
+            if frame[4] != 0:
+                return None                                                   # имена узлов окну не нужны
+            return bytes([0, P.NODE_COUNT]) + struct.pack(f"<{P.NODE_COUNT}H", *TYPES)
         if ctrl == R.ADC1:
             return b"\xff" + struct.pack("<10H", 3, 0, vol, vol, 7, 0, 0, 0, 0, 1)
         if ctrl == R.QUERY:
@@ -125,12 +167,57 @@ class FakeSession:
             return _node(1, ord("B"), ord("u"), 0)                          # буква SDK «B» — на панели «C»
         if ctrl == R.PITCH:
             return _node(0, -40)                                              # голос выкл. (высота от Elder)
+        if ctrl in core.sc3_nodes:
+            return _node(*core.sc3_nodes[ctrl])
         return None
+
+    def get_input(self) -> bytes:
+        return self.last
+
+    def close(self) -> None:
+        pass
+
+
+class FakeSession(Sc3):
+    """SC3, открытый для опроса: настоящий `device.Sc3` поверх `FakeAcp`. `read` ещё и отмечает каждое чтение для
+    тестов (`core.poll_reads`) и умеет не ответить (`core.fail_reads`, без кадра)."""
+
+    def __init__(self, core: FakeCore) -> None:
+        super().__init__(FakeAcp(core))
+        self.core = core
+        self.closed = False
+
+    def read(self, ctrl: int) -> bytes | None:
+        core = self.core
+        if self.closed:
+            raise AssertionError("чтение из закрытой сессии")
+        if core.fail_reads > 0:
+            core.fail_reads -= 1
+            body = None
+        else:
+            body = super().read(ctrl)
+        core.poll_reads.append((ctrl, time.monotonic(), threading.current_thread().name))
+        return body
 
     def close(self) -> None:
         if not self.closed:
             self.closed = True
             self.core.open_sessions -= 1
+            super().close()
+
+
+class MemorySettings:
+    """Как QSettings, но в памяти: `--fake` и тесты не читают и не пишут настройки окна владельца."""
+
+    def __init__(self, values: dict | None = None) -> None:
+        self.values = dict(values or {})
+
+    def value(self, key: str, default=None, type=None):  # `type` — как у QSettings
+        v = self.values.get(key, default)
+        return type(v) if type is not None and v is not None else v
+
+    def setValue(self, key: str, value) -> None:
+        self.values[key] = value
 
 
 class FakeCore:
@@ -144,13 +231,19 @@ class FakeCore:
         self.link = {"disconnected": Link.DISCONNECTED, "no-access": Link.NO_ACCESS}.get(scenario, Link.CONNECTED)
         self.live = Live.UNKNOWN if scenario == "unknown-live" else Live.OFF
         self.live_since: float | None = None
-        self.live_after_read = scenario in ("onair", "onair-muted")
+        self.live_after_read = scenario in ("onair", "onair-muted", "write-onair")
         self.nodes: FakeNodes | None = None if scenario == "disconnected" else FakeNodes()
         self.pw_muted = scenario in ("muted", "onair-muted")
         self.hw_mute = scenario == "hw-muted"
         self.demo = demo           # --fake: ползунок Mic медленно ходит, чтобы было видно опрос
         self.busy = False          # интерфейс держит другой процесс
         self.fail_reads = 0        # столько следующих чтений опроса не ответят
+        # устройство: поправка MIC (узел 0xAC, Q12) — то, что пишет окно
+        trim = W.q12(2.5) if scenario in WRITE_SCENARIOS else 4096
+        self.sc3_nodes: dict[int, list[int]] = {W.MIC_TRIM: [1, 0, trim]}
+        self.trim_stuck = False    # запись подтверждается, а значение не меняется — чтение назад не сойдётся
+        self.journal: Path | None = None   # журнал записи окна; None — только в памяти (не writes.jsonl владельца)
+        self._settings = MemorySettings({WRITE_KEY: scenario in WRITE_SCENARIOS})
         # для тестов
         self.reads = 0
         self.read_threads: list[str] = []
@@ -159,6 +252,8 @@ class FakeCore:
         self.probes = 0
         self.watchers: list[FakeWatcher] = []
         self.poll_reads: list[tuple[int, float, str]] = []  # (адрес, time.monotonic(), поток)
+        self.acp: list[tuple[int, int, float, str]] = []     # каждый кадр ACP: (ctrl, LEN, time.monotonic(), поток)
+        self.writes: list[tuple[int, int, int]] = []          # принятые кадры записи: (узел, индекс, значение)
         self.open_sessions = 0
         self.sessions_opened = 0
 
@@ -206,7 +301,8 @@ class FakeCore:
             dsp_load=0.86,
             read_at=now,
             # как настоящий reader: mute из чтения не узнать; «hw-muted» показывает догадку опроса
-            mic=Channel(fader=0.8, muted=True, muted_guess=True) if self.scenario == "hw-muted" else Channel(0.8),
+            mic=replace(Channel(fader=0.8, muted=True, muted_guess=True) if self.scenario == "hw-muted"
+                        else Channel(0.8), trim_db=R.mic_trim(self.sc3_nodes[W.MIC_TRIM])),
             line_in=Channel(fader=0.52),
             voice="",
             electric_key="C",
@@ -218,11 +314,15 @@ class FakeCore:
         if self.scenario in ("foreign", "error"):
             raise OpenFailed("сборка прошивки не V22 — SC3 не читаем" if self.scenario == "foreign"
                              else "verify: SC3 не ответил", Link.FOREIGN if self.scenario == "foreign" else Link.ERROR)
+        session = FakeSession(self)
+        bad = R.verify_link(session)          # как RealCore.open_sc3: дескриптор и 0x00 (V22)
+        if bad is not None:
+            raise OpenFailed("verify: SC3 не ответил", bad)
         if self.live_after_read:
             self.live, self.live_since = Live.ON, time.time() - ON_AIR_FOR
         self.open_sessions += 1
         self.sessions_opened += 1
-        return FakeSession(self)
+        return session
 
     # --- OBS ------------------------------------------------------------------------------------------
 
@@ -244,3 +344,11 @@ class FakeCore:
 
     def meter(self, nodes: FakeNodes) -> FakeMeter:
         return FakeMeter(self)
+
+    # --- окно -----------------------------------------------------------------------------------------
+
+    def settings(self) -> MemorySettings:
+        return self._settings
+
+    def journal_path(self) -> Path | None:
+        return self.journal

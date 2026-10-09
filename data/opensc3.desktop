@@ -8,8 +8,8 @@ GenericName[ru]=Панель микшера
 Comment=fifine AmpliGame SC3 on Linux: state, levels, microphone mute
 Comment[ru]=fifine AmpliGame SC3 под Linux: состояние, уровни, заглушение микрофона
 Exec=opensc3
-# Своего значка в теме пока нет (значки трея лежат в пакете): до установки — общий
-Icon=audio-card
+# Значок — data/opensc3.svg; в тему его кладут `sc3 install` (~/.local/share) и пакет (packaging/arch)
+Icon=opensc3
 Terminal=false
 Categories=AudioVideo;Audio;Mixer;
 Keywords=OpenSC3;fifine;AmpliGame;SC3;mixer;microphone;mute;микшер;микрофон;

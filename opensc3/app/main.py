@@ -1,4 +1,5 @@
-"""Окно и трей SC3: `python3 -m opensc3.app` или `opensc3`. Только чтение SC3 (решение 4).
+"""Окно и трей SC3: `python3 -m opensc3.app` или `opensc3`. SC3 окно читает; пишет только ручка-поправка MIC — через
+белый список записи и только с включённым предохранителем (меню-шестерёнка; решение 4, docs/WRITE.md).
 
 Один экземпляр: имя на сессионной шине D-Bus; второй запуск просит первый показать окно и выходит. Закрытие
 окна — в трей (если трей есть). `--fake [сценарий]` — на подделке ядра, без SC3, OBS и PipeWire.
@@ -18,20 +19,23 @@ DBUS_SERVICE = "dev.s1dd1.opensc3"
 DBUS_PATH = "/Panel"
 DBUS_INTERFACE = "dev.s1dd1.opensc3.Panel"
 QML_MAIN = Path(__file__).resolve().parent / "qml" / "Main.qml"
-SHOT_SETTLE_MS = 2600                      # --screenshot: первые ответы подделки, эфир, анимации
+SHOT_SETTLE_MS = 3200                      # --screenshot: поправка MIC + полный набор подделки, эфир, анимации
 SHOT_LIVE_INTERVAL = 1.0
+# --screenshot --tip: подсказка полосы поправок (как в макетах) или открытое меню-шестерёнка
+SHOT_TIPS = {"trim-off": "forcedTip", "trim-mic": "forcedTip", "trim-linein": "forcedTip", "settings": "settingsOpen"}
 
 log = logging.getLogger("opensc3.app")
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    ap = argparse.ArgumentParser(prog="opensc3", description="Окно и трей fifine AmpliGame SC3 (только чтение).")
+    ap = argparse.ArgumentParser(prog="opensc3", description="Окно и трей fifine AmpliGame SC3.")
     ap.add_argument("--fake", nargs="?", const="normal", choices=list(SCENARIOS), metavar="СЦЕНАРИЙ",
                     help="подделка ядра вместо SC3/OBS/PipeWire: " + ", ".join(SCENARIOS) + " (по умолчанию normal)")
     ap.add_argument("--tray", action="store_true", help="запуститься в трей, не показывая окно")
     ap.add_argument("--screenshot", type=Path, metavar="PNG", help="без экрана: отрисовать окно в PNG и выйти")
     ap.add_argument("--section", choices=["mic", "voice", "electric"], help="с --screenshot: открыть этот ящик")
     ap.add_argument("--software", action="store_true", help="с --screenshot: без GPU (плоский вид)")
+    ap.add_argument("--tip", choices=list(SHOT_TIPS), help="с --screenshot: показать подсказку или меню")
     ap.add_argument("-v", "--verbose", action="store_true", help="подробный журнал")
     return ap.parse_args(argv)
 
@@ -80,6 +84,7 @@ def main(argv: list[str] | None = None) -> int:
         prepare(gpu=not args.software)
     try:
         from PySide6.QtCore import QTimer, QUrl
+        from PySide6.QtGui import QIcon
         from PySide6.QtQml import QQmlApplicationEngine
         from PySide6.QtQuick import QQuickWindow  # noqa: F401 — корень Main.qml придёт как QQuickWindow, не QWindow
         from PySide6.QtWidgets import QApplication, QSystemTrayIcon
@@ -94,6 +99,8 @@ def main(argv: list[str] | None = None) -> int:
     app.setApplicationName(APP_ID)
     app.setApplicationDisplayName("OpenSC3")
     app.setDesktopFileName(APP_ID)
+    if QIcon.hasThemeIcon(APP_ID):  # значок в теме (sc3 install, пакет); нет — как было (KDE иначе даст «неизвестный»)
+        app.setWindowIcon(QIcon.fromTheme(APP_ID))
     app.setQuitOnLastWindowClosed(False)
 
     window = None
@@ -148,6 +155,9 @@ def prepare_screenshot(window, args) -> None:
     window.setProperty("animations", False)
     if args.section:
         window.setProperty("section", args.section)
+    if args.tip:
+        prop = SHOT_TIPS[args.tip]
+        window.setProperty(prop, True if prop == "settingsOpen" else args.tip)
     window.setWidth(round(window.property("designWidth")))  # 1:1, а не под экран offscreen (800×600)
     window.setHeight(round(window.property("fullHeight")))  # по содержимому: ящик целиком, без прокрутки
     window.show()
