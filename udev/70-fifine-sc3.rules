@@ -1,0 +1,27 @@
+# Доступ к микшеру fifine SC3 (USB 3142:0c33) для того, кто сидит за s1dPC (TAG uaccess), без группы input.
+# sc3-linux, udev/70-fifine-sc3.rules. Разбор — docs/RESEARCH.md §5.1; проверка — python3 -m sc3linux doctor.
+#
+#   sudo install -m 644 ~/dev/sc3-linux/udev/70-fifine-sc3.rules /etc/udev/rules.d/
+#   sudo udevadm control --reload
+#   sudo udevadm trigger --action=change /dev/input/by-id/usb-MV-SILICON_fifine_SC3_20190808-event-if03 /dev/input/by-id/usb-MV-SILICON_fifine_SC3_20190808-if03-hidraw
+#   getfacl -p /dev/input/by-id/usb-MV-SILICON_fifine_SC3_20190808-event-if03      # ждём строку user:s1dd1:rw-
+#
+# Номер 70 — раньше 73-seat-late.rules, который по метке uaccess выдаёт права (ACL) пользователю сессии.
+# Серийник 20190808 общий для устройств на SDK MVsilicon (он же у SC8) — сверяем VID:PID, не серийник.
+
+ACTION=="remove", GOTO="fifine_sc3_end"
+
+# Этап 1 — кнопки: evdev (event-if03) и сырые отчёты consumer-HID (if03-hidraw). Только чтение.
+SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="3142", ATTRS{idProduct}=="0c33", TAG+="uaccess"
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="3142", ATTRS{idProduct}=="0c33", TAG+="uaccess"
+
+# Этап 2 — ACP по интерфейсу 4 через libusb (разведка разрешена владельцем 07.10.2026).
+# Доступ к USB-узлу позволяет послать устройству любой control-запрос, в том числе вход в загрузчик, —
+# защита только в коде: белый список кадров-чтений (sc3linux/protocol.py, docs/GOTCHAS.md). Применить к уже подключённому SC3:
+#   sudo udevadm trigger --action=change --attr-match=idVendor=3142 --attr-match=idProduct=0c33
+SUBSYSTEM=="usb", ENV{DEVTYPE}=="usb_device", ATTR{idVendor}=="3142", ATTR{idProduct}=="0c33", TAG+="uaccess"
+
+# Этап 4 — пользовательская служба sc3d стартует, когда SC3 подключён.
+#SUBSYSTEM=="input", KERNEL=="event*", ATTRS{idVendor}=="3142", ATTRS{idProduct}=="0c33", TAG+="systemd", ENV{SYSTEMD_USER_WANTS}+="sc3d.service"
+
+LABEL="fifine_sc3_end"

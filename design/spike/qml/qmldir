@@ -1,0 +1,9 @@
+singleton Theme 1.0 Theme.qml
+Chassis 1.0 Chassis.qml
+Print 1.0 Print.qml
+Divider 1.0 Divider.qml
+Led 1.0 Led.qml
+Fader 1.0 Fader.qml
+LedButton 1.0 LedButton.qml
+Pad 1.0 Pad.qml
+Knob 1.0 Knob.qml

@@ -1,0 +1,28 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.ruff_cache/
+
+# Чужое — никогда в репо (docs/DECISIONS.md, решение 5):
+# прошивка Fifine, её расшифровка и всё, что из неё извлечено
+firmware/
+*.MVA
+*.mva
+*.bin
+# Дампы с устройства: в них имена узлов из прошивки Fifine. Для тестов — свои синтетические данные
+dumps/
+# Записи голоса для подбора обработки
+*.wav
+*.raw
+# Фото и руководство Fifine для отрисовки панели — только локально (решение 5)
+refs/
+# Рендеры макетов генерируются (design/panel/render.py, sc3-panel --screenshot); в git — только сводные листы выбора
+design/renders/**
+!design/renders/v1/
+!design/renders/v2/
+!design/renders/v1/compare*.png
+!design/renders/v2/compare*.png

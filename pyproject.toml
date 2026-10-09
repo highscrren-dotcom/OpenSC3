@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sc3-linux"
+version = "0.0.1"
+description = "fifine AmpliGame SC3 on Linux: ACP protocol, CLI, (later) daemon and control panel"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []           # ядро — только stdlib + системная libusb-1.0 (ctypes)
+
+[project.optional-dependencies]
+buttons = ["evdev"]          # sc3 listen; в CachyOS — python-evdev
+hotplug = ["pyudev"]         # будущая служба; python-pyudev
+obs = ["websockets"]         # будущая связь с OBS; python-websockets
+panel = ["PySide6>=6.8"]     # окно и трей (sc3-panel); в CachyOS — pyside6
+
+[project.scripts]
+sc3 = "sc3linux.cli:main"
+
+[project.gui-scripts]
+sc3-panel = "sc3linux.app.main:main"
+
+[tool.setuptools]
+packages = ["sc3linux", "sc3linux.app"]
+
+[tool.setuptools.package-data]
+# QML окна, шрифт Arimo с лицензией (SIL OFL 1.1), значки трея — едут с пакетом
+"sc3linux.app" = ["qml/*.qml", "qml/qmldir", "fonts/*.ttf", "fonts/*.txt", "icons/*.svg", "icons/png/*.png"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+extend-exclude = ["research"]  # разовые скрипты разведки, не пакет
