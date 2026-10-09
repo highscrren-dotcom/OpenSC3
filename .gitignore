@@ -20,7 +20,7 @@ dumps/
 *.raw
 # Фото и руководство Fifine для отрисовки панели — только локально (решение 5)
 refs/
-# Рендеры макетов генерируются (design/panel/render.py, sc3-panel --screenshot); в git — только сводные листы выбора
+# Рендеры макетов генерируются (design/panel/render.py, opensc3 --screenshot); в git — только сводные листы выбора
 design/renders/**
 !design/renders/v1/
 !design/renders/v2/

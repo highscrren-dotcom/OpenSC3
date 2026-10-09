@@ -1,7 +1,7 @@
 """Расшифровка блоков на настоящих числах SC3 (дамп 07.10.2026) — то, что видели глазами в docs/RESEARCH.md §12.4."""
 import unittest
 
-from sc3linux import layouts as L
+from opensc3 import layouts as L
 from tests.fake import BLOCKS
 
 

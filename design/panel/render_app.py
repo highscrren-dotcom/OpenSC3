@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Снимки самого приложения (sc3linux/app) на подделке ядра — без экрана, без SC3, OBS и PipeWire.
+"""Снимки самого приложения (opensc3/app) на подделке ядра — без экрана, без SC3, OBS и PipeWire.
 
     python3 design/panel/render_app.py [имя ...]
 
-Каждый кадр — отдельный процесс `python3 -m sc3linux.app --fake <сценарий> --screenshot <png>`: платформа
+Каждый кадр — отдельный процесс `python3 -m opensc3.app --fake <сценарий> --screenshot <png>`: платформа
 offscreen, окна и значка трея нет, D-Bus не трогается. В отличие от render.py (макеты: те же QML-компоненты с
 DemoState), здесь работает настоящий бэкенд: потоки, гвард, баллистика уровней — только ядро поддельное.
 Результат — design/renders/app/<имя>.png и лист compare-app.png (ImageMagick montage).
@@ -20,7 +20,7 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parents[1]
 OUT = HERE.parent / "renders" / "app"
-FONT = ROOT / "sc3linux" / "app" / "fonts" / "Arimo-Bold.ttf"
+FONT = ROOT / "opensc3" / "app" / "fonts" / "Arimo-Bold.ttf"
 
 # имя → (сценарий подделки, ящик, без GPU, подпись на листе)
 JOBS: dict[str, tuple[str, str | None, bool, str]] = {
@@ -42,7 +42,7 @@ SHEET = ["panel", "onair", "onair-muted", "disconnected", "no-access", "unknown-
 
 def shoot(name: str, out: Path) -> bool:
     scenario, section, software, _ = JOBS[name]
-    cmd = [sys.executable, "-B", "-m", "sc3linux.app", "--fake", scenario, "--screenshot", str(out / f"{name}.png")]
+    cmd = [sys.executable, "-B", "-m", "opensc3.app", "--fake", scenario, "--screenshot", str(out / f"{name}.png")]
     if section:
         cmd += ["--section", section]
     if software:

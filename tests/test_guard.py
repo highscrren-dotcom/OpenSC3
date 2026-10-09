@@ -3,8 +3,8 @@ import unittest
 import unittest.mock
 from pathlib import Path
 
-from sc3linux import guard as G
-from sc3linux.model import Live
+from opensc3 import guard as G
+from opensc3.model import Live
 
 
 class Clock:

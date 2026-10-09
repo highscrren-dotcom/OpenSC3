@@ -17,10 +17,10 @@ import struct
 import time
 from dataclasses import replace
 
-from sc3linux import protocol as P
-from sc3linux import reader as R
-from sc3linux.guard import POLL_INTERVAL
-from sc3linux.model import Channel
+from opensc3 import protocol as P
+from opensc3 import reader as R
+from opensc3.guard import POLL_INTERVAL
+from opensc3.model import Channel
 
 MAX_FAILS = 3   # неудачи подряд → опрос выключен до переподключения SC3
 REFRESH = tuple(c for c in R.FULL_SET if c not in R.POLL_CYCLE)  # «Обновить» в опросе: чего нет в круге (0x02)

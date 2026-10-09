@@ -2,10 +2,10 @@
 import struct
 import unittest
 
-from sc3linux import protocol as P
-from sc3linux.device import Sc3
-from sc3linux.model import KEYS, VOICES, Link
-from sc3linux.reader import ELECTRIC_KEYS, PANEL_ORDER, SDK_CIRCLE, VOICE_PITCH, line_in_fader, read_state
+from opensc3 import protocol as P
+from opensc3.device import Sc3
+from opensc3.model import KEYS, VOICES, Link
+from opensc3.reader import ELECTRIC_KEYS, PANEL_ORDER, SDK_CIRCLE, VOICE_PITCH, line_in_fader, read_state
 from tests.fake import FakeTransport
 
 Sc3.DELAY = 0

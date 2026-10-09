@@ -1,7 +1,7 @@
 """Подделка ядра для `--fake` и тестов: SC3, OBS и PipeWire без железа, без сети и без PipeWire.
 
 Повторяет договор `core.Core` и поведение настоящих модулей там, где оно важно окну: гвард — настоящий
-`sc3linux.guard.AcpGuard` (без файла-отметки), набор чтений даёт то же, что умеет `reader.read_state`
+`opensc3.guard.AcpGuard` (без файла-отметки), набор чтений даёт то же, что умеет `reader.read_state`
 (ползунки Mic и Line In, Mute микрофона, ELECTRIC, «голос выкл.»; остальное — None), сессия опроса отдаёт тела
 ответов в раскладке SC3 (их разбирает настоящий `reader`), hotplug — канал `os.pipe()` под QSocketNotifier.
 Счётчики вызовов, моменты чтений и потоки — для тестов.
@@ -15,12 +15,12 @@ import threading
 import time
 from dataclasses import dataclass
 
-from sc3linux import reader as R
-from sc3linux.model import Channel, Link, Live, Sc3State
+from opensc3 import reader as R
+from opensc3.model import Channel, Link, Live, Sc3State
 
 from .core import SC3_BUSY, OpenFailed
 
-# Сценарии `python3 -m sc3linux.app --fake <имя>`.
+# Сценарии `python3 -m opensc3.app --fake <имя>`.
 SCENARIOS = {
     "normal": "SC3 подключён, эфира нет",
     "muted": "микрофон заглушён в PipeWire",
@@ -172,7 +172,7 @@ class FakeCore:
     # --- SC3 ------------------------------------------------------------------------------------------
 
     def guard(self):
-        from sc3linux.guard import AcpGuard
+        from opensc3.guard import AcpGuard
         return AcpGuard(min_interval=self.min_interval)  # без stamp: тест и показ не трогают отметку CLI
 
     def probe(self) -> tuple[Link, str | None]:

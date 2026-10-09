@@ -6,8 +6,8 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from sc3linux import obs
-from sc3linux.model import Live
+from opensc3 import obs
+from opensc3.model import Live
 
 try:
     from websockets.exceptions import ConnectionClosed

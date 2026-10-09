@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from sc3linux.model import Link, Live, Sc3State
-from sc3linux.protocol import Sc3Busy  # чистый модуль без зависимостей
+from opensc3.model import Link, Live, Sc3State
+from opensc3.protocol import Sc3Busy  # чистый модуль без зависимостей
 
 LIVE_TIMEOUT = 1.0     # obs.live_status: дольше секунды не ждём
 ACP_MIN_INTERVAL = 5.0  # AcpGuard: набор чтений не чаще раза в 5 с (правило 4)
@@ -71,35 +71,35 @@ def source_id(nodes: Any) -> int:
 
 
 class RealCore:
-    """Настоящее ядро: sc3linux.{device,reader,guard,obs,pipewire,hotplug}."""
+    """Настоящее ядро: opensc3.{device,reader,guard,obs,pipewire,hotplug}."""
 
     def __init__(self) -> None:
-        from sc3linux import guard
+        from opensc3 import guard
         self.continuous_polling = guard.CONTINUOUS_POLLING
 
     def guard(self) -> Guard:
-        from sc3linux.guard import AcpGuard, default_stamp
+        from opensc3.guard import AcpGuard, default_stamp
         # Отметка общая с CLI: `sc3 state` и окно вместе не опросят SC3 чаще интервала.
         return AcpGuard(min_interval=ACP_MIN_INTERVAL, stamp=default_stamp())
 
     def probe(self) -> tuple[Link, str | None]:
-        from sc3linux import hotplug
+        from opensc3 import hotplug
         return hotplug.probe()
 
     def watcher(self) -> Watcher:
-        from sc3linux import hotplug
+        from opensc3 import hotplug
         return hotplug.Watcher()
 
     def read_state(self, now: float) -> Sc3State:
-        from sc3linux.device import Sc3
-        from sc3linux.reader import read_state
+        from opensc3.device import Sc3
+        from opensc3.reader import read_state
         with Sc3.open() as sc3:
             return read_state(sc3, now)
 
     def open_sc3(self) -> Session:
-        from sc3linux import protocol as P
-        from sc3linux import reader
-        from sc3linux.device import Sc3
+        from opensc3 import protocol as P
+        from opensc3 import reader
+        from opensc3.device import Sc3
         try:
             sc3 = Sc3.open()  # неудачный захват закрывает транспорт сам; занято — Sc3Busy с текстом SC3_BUSY
         except Sc3Busy:
@@ -114,21 +114,21 @@ class RealCore:
         return sc3  # Sc3.read(ctrl) и close() — ровно Session
 
     def live_status(self) -> tuple[Live, float | None]:
-        from sc3linux.obs import live_status
+        from opensc3.obs import live_status
         return live_status(timeout=LIVE_TIMEOUT)
 
     def find_sc3(self) -> Any | None:
-        from sc3linux import pipewire
+        from opensc3 import pipewire
         return pipewire.find_sc3()
 
     def get_mute(self, nodes: Any) -> bool | None:
-        from sc3linux import pipewire
+        from opensc3 import pipewire
         return pipewire.get_mute(source_id(nodes))
 
     def set_mute(self, nodes: Any, muted: bool) -> None:
-        from sc3linux import pipewire
+        from opensc3 import pipewire
         pipewire.set_mute(source_id(nodes), muted)
 
     def meter(self, nodes: Any) -> Meter:
-        from sc3linux import pipewire
+        from opensc3 import pipewire
         return pipewire.LevelMeter(nodes)

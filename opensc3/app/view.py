@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 
-from sc3linux.model import VOICES, AppState, Link, Live
+from opensc3.model import VOICES, AppState, Link, Live
 
 METER_FLOOR_DB = -54.0   # низ полосы из 9 светодиодов: 6 дБ на светодиод, верхний — 0 dBFS
 METER_FALL_PER_S = 1.6   # спад показаний: вся полоса за ~0,6 с (подъём — мгновенный)

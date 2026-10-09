@@ -15,7 +15,7 @@ Window {
     readonly property real zoom: width / content.width
     readonly property real fullHeight: content.height * zoom
 
-    title: "SC3"
+    title: "OpenSC3"
     color: "#101010"
     minimumWidth: 600
     minimumHeight: 360

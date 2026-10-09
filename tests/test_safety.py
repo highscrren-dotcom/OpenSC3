@@ -6,10 +6,10 @@ import re
 import subprocess
 import unittest
 
-from sc3linux import protocol as P
+from opensc3 import protocol as P
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-PKG = ROOT / "sc3linux"
+PKG = ROOT / "opensc3"
 # Имя узла из таблицы прошивки Fifine: «<канал>:<Слово> <Слово>…» (решение 5). Синтетика тестов («1:Fake 7») не
 # подходит. Журнал только дописывается — его прошлые записи не правим.
 NODE_NAME = re.compile(r"\b\d{1,2}:[A-Z][a-z]+ [A-Z]")
@@ -71,7 +71,7 @@ class Fifine(unittest.TestCase):
 
     def test_no_firmware_node_names(self):
         files = repo_files()
-        self.assertIn("sc3linux/reader.py", files)
+        self.assertIn("opensc3/reader.py", files)
         hits = []
         for rel_path in files:
             if rel_path in NODE_NAME_EXEMPT or rel_path.split("/")[0] in OUTSIDE_GIT:
@@ -139,7 +139,7 @@ class Obs(unittest.TestCase):
     """OBS: ровно GetStreamStatus и GetRecordStatus, без пакетов запросов, и только из obs.py."""
 
     def test_only_two_request_types(self):
-        from sc3linux import obs
+        from opensc3 import obs
         self.assertEqual(set(obs.REQUESTS), OBS_REQUESTS)
         tree = ast.parse((PKG / "obs.py").read_text())
         loops = {}  # имя переменной цикла → по чему цикл
@@ -194,7 +194,7 @@ class PipeWire(unittest.TestCase):
                 self.assertNotIn(bad, text, f"{bad} в {rel(f)}")
 
     def test_meter_writes_nowhere(self):
-        from sc3linux.pipewire import record_cmd
+        from opensc3.pipewire import record_cmd
         for sink in (False, True):
             cmd = record_cmd("x", sink)
             self.assertEqual(cmd[-1], "-", "pw-record только в канал")

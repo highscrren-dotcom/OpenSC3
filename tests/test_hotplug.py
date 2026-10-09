@@ -4,8 +4,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from sc3linux import hotplug as H
-from sc3linux.model import Link
+from opensc3 import hotplug as H
+from opensc3.model import Link
 
 
 def usb(root: Path, name: str, vid: str, pid: str, bus=3, num=7):

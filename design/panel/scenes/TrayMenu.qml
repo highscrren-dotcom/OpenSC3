@@ -1,11 +1,11 @@
 import QtQuick
 import QtQuick.Shapes
-import "../../../sc3linux/app/qml"
+import "../../../opensc3/app/qml"
 
 // The tray context menu over a Plasma 6 panel (Breeze Dark), right-click on the SC3 icon.
 // It is the system QMenu, so it wears Breeze colours, not the brand amber: background #2a2e32,
 // hover = Breeze blue #3daee9 at ~25 % with a frame. The other tray icons are neutral stand-ins
-// (plain shapes, not Breeze icons). Our icon is the 22 px "connected" PNG from ../icons/export.py (sc3linux/app/icons/png);
+// (plain shapes, not Breeze icons). Our icon is the 22 px "connected" PNG from ../icons/export.py (opensc3/app/icons/png);
 // at 2x Qt picks its @2x file by itself. Root is a plain Rectangle for the off-screen renderer.
 Rectangle {
     id: frame
@@ -157,7 +157,7 @@ Rectangle {
                     visible: slot.modelData === "sc3"
                     width: 22
                     height: 22
-                    source: "../../../sc3linux/app/icons/png/sc3-connected-22-dark.png"
+                    source: "../../../opensc3/app/icons/png/sc3-connected-22-dark.png"
                 }
             }
         }

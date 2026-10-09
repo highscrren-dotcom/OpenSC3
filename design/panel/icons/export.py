@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Rasterise the tray icons (sc3linux/app/icons/*.svg) to PNG, without any window.
+"""Rasterise the tray icons (opensc3/app/icons/*.svg) to PNG, without any window.
 
     python3 -B design/panel/icons/export.py [--qt]
 
-The icons live with the app (sc3linux/app/icons/: the tray uses the PNGs, the mock-ups too).
+The icons live with the app (opensc3/app/icons/: the tray uses the PNGs, the mock-ups too).
 For every <name>.svg there writes png/<name>-<theme>.png at natural size and
 png/<name>-<theme>@2x.png at double size, for both Plasma panel themes:
 
@@ -26,7 +26,7 @@ import sys
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-ICONS = HERE.parents[2] / "sc3linux" / "app" / "icons"  # one copy, next to the app
+ICONS = HERE.parents[2] / "opensc3" / "app" / "icons"  # one copy, next to the app
 OUT = ICONS / "png"
 THEMES = {"dark": "#fcfcfc", "light": "#232629"}
 SCALES = {"": 1, "@2x": 2}

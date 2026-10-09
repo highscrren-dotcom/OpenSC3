@@ -65,7 +65,7 @@ The order:
 1. Read `STATE.md` — what we are doing.
 2. Read the **last** `JOURNAL.md` entry — what we ran into last time.
 3. Look at `git log --oneline -10` and `git status`.
-4. **Check the state by running it** — `python3 -m sc3linux doctor` and whatever the task needs.
+4. **Check the state by running it** — `python3 -m opensc3 doctor` and whatever the task needs.
    The document may have fallen behind the facts; the facts win.
 5. Report in a few lines: where the project is, what changed since the last entry, what
    is proposed to do — and start.

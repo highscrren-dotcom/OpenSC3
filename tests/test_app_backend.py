@@ -9,7 +9,7 @@ import threading
 import time
 import unittest
 
-from sc3linux import reader as R
+from opensc3 import reader as R
 
 HAVE_QT = importlib.util.find_spec("PySide6") is not None
 app = None
@@ -19,10 +19,10 @@ def setUpModule():
     global app
     if not HAVE_QT:
         raise unittest.SkipTest("нет PySide6 (sudo pacman -S pyside6)")
-    logging.getLogger("sc3linux.app").setLevel(logging.ERROR)  # отказы подделки ожидаемы — без шума в выводе
+    logging.getLogger("opensc3.app").setLevel(logging.ERROR)  # отказы подделки ожидаемы — без шума в выводе
     from PySide6.QtWidgets import QApplication
 
-    from sc3linux.app.headless import prepare
+    from opensc3.app.headless import prepare
     app = QApplication.instance()
     if app is None:
         prepare(gpu=False)
@@ -50,8 +50,8 @@ def wait_until(cond, timeout: float = 5.0) -> bool:
 
 class BackendCase(unittest.TestCase):
     def make(self, scenario="normal", *, live=None, min_interval=5.0, full_set_first=True):
-        from sc3linux.app.backend import Backend
-        from sc3linux.app.fake import FakeCore
+        from opensc3.app.backend import Backend
+        from opensc3.app.fake import FakeCore
         core = FakeCore(scenario, min_interval=min_interval)
         if live is not None:
             core.live = live
@@ -69,7 +69,7 @@ class BackendCase(unittest.TestCase):
 
 class OnAir(BackendCase):
     def test_on_air_acp_is_never_touched(self):
-        from sc3linux.model import Live
+        from opensc3.model import Live
         for live in (Live.ON, Live.UNKNOWN):
             with self.subTest(live=live):
                 core, b = self.visible(live=live)
@@ -86,7 +86,7 @@ class OnAir(BackendCase):
                 self.assertFalse(b.property("polling"))
 
     def test_going_live_stops_poll_and_closes_sc3(self):
-        from sc3linux.model import Live
+        from opensc3.model import Live
         core, b = self.visible()
         self.assertTrue(wait_until(lambda: len(core.poll_reads) >= 2))
         core.live = Live.ON
@@ -141,7 +141,7 @@ class Poll(BackendCase):
         self.assertTrue(wait_until(lambda: core.open_sessions == 1 and len(core.poll_reads) > n))
 
     def test_three_failures_stop_until_reconnect(self):
-        from sc3linux.model import Link
+        from opensc3.model import Link
         core, b = self.visible(full_set_first=False, min_interval=0.5)
         self.assertTrue(wait_until(lambda: len(core.poll_reads) >= 1))
         core.fail_reads = 3
@@ -159,7 +159,7 @@ class Poll(BackendCase):
         self.assertEqual(b.property("link"), "connected")
 
     def test_busy_says_so_and_retries(self):
-        from sc3linux.app.core import SC3_BUSY
+        from opensc3.app.core import SC3_BUSY
         core, b = self.make()
         core.busy = True
         b.set_window_visible(True)
@@ -183,7 +183,7 @@ class HiddenWindow(BackendCase):
     """Окно скрыто (в трее): SC3 не опрашивается, полный набор — только по событию и не чаще раза в 5 с."""
 
     def test_refresh_twice_second_refused_by_guard(self):
-        from sc3linux.model import Live
+        from opensc3.model import Live
         core, b = self.make(live=Live.UNKNOWN)  # старт под замком: стартовый набор не состоится
         b.start()
         self.assertTrue(wait_until(lambda: core.live_calls >= 2))
@@ -207,7 +207,7 @@ class HiddenWindow(BackendCase):
         self.assertNotIn("MainThread", core.read_threads)
 
     def test_reconnect_reads_again_and_unplug_forgets(self):
-        from sc3linux.model import Link
+        from opensc3.model import Link
         core, b = self.make("disconnected", min_interval=0.5)
         b.start()
         self.assertTrue(wait_until(lambda: core.probes >= 1))
@@ -236,7 +236,7 @@ class HiddenWindow(BackendCase):
 
 class Mute(BackendCase):
     def test_mute_goes_to_pipewire_off_air_and_on_air(self):
-        from sc3linux.model import Live
+        from opensc3.model import Live
         for live in (Live.OFF, Live.ON):
             with self.subTest(live=live):
                 core, b = self.make(live=live)
@@ -280,7 +280,7 @@ class TrayMenu(BackendCase):
         QCoreApplication.sendPostedEvents(tray, QEvent.Type.DeferredDelete)
 
     def test_tray_follows_state_and_mutes_through_pipewire(self):
-        from sc3linux.app.tray import Tray
+        from opensc3.app.tray import Tray
         core, b = self.make()
         calls = []
         tray = Tray(b, show_window=lambda: calls.append("show"), toggle_window=lambda: calls.append("toggle"),

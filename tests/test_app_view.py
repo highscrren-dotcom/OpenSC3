@@ -1,10 +1,10 @@
-"""Представление окна и трея (sc3linux/app/view.py): без Qt, без устройства."""
+"""Представление окна и трея (opensc3/app/view.py): без Qt, без устройства."""
 import pathlib
 import re
 import unittest
 
-from sc3linux.app import view
-from sc3linux.model import AppState, AudioState, Channel, Link, Live, Sc3State
+from opensc3.app import view
+from opensc3.model import AppState, AudioState, Channel, Link, Live, Sc3State
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEMO = ROOT / "design" / "panel" / "scenes" / "DemoState.qml"
@@ -120,7 +120,7 @@ class Tray(unittest.TestCase):
         self.assertEqual(view.tray_icon(self.st(link=Link.NO_ACCESS)), "connected")
 
     def test_icon_files_exist(self):
-        png = ROOT / "sc3linux" / "app" / "icons" / "png"
+        png = ROOT / "opensc3" / "app" / "icons" / "png"
         for name in ("connected", "muted", "disconnected", "onair", "onair-muted"):
             for size in (22, 32):
                 for theme in ("dark", "light"):

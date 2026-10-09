@@ -34,7 +34,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 SCENES = HERE / "scenes"
-FONTS = HERE.parents[1] / "sc3linux" / "app" / "fonts"  # shipped with the app
+FONTS = HERE.parents[1] / "opensc3" / "app" / "fonts"  # shipped with the app
 DEFAULT_OUT = HERE.parent / "renders" / "v2"
 
 # name -> scene stem, initial properties, scale factors, backend ("gpu" | "software").

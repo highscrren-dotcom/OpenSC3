@@ -6,9 +6,9 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from sc3linux import cli
-from sc3linux.device import Sc3
-from sc3linux.model import Live
+from opensc3 import cli
+from opensc3.device import Sc3
+from opensc3.model import Live
 from tests.fake import FakeTransport
 
 Sc3.DELAY = 0
@@ -28,8 +28,8 @@ class Gate(unittest.TestCase):
 
     def run_cli(self, argv, live):
         out, err = io.StringIO(), io.StringIO()
-        with mock.patch("sc3linux.obs.live_status", return_value=live), \
-                mock.patch("sc3linux.guard.default_stamp", return_value=self.stamp), \
+        with mock.patch("opensc3.obs.live_status", return_value=live), \
+                mock.patch("opensc3.guard.default_stamp", return_value=self.stamp), \
                 mock.patch.object(cli, "_open", self.fake_open), \
                 contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = cli.main(argv)

@@ -1,12 +1,12 @@
-"""Дверь окна к ядру (sc3linux/app/core.py, RealCore) сходится с модулями ядра: всё на заглушках, без SC3,
+"""Дверь окна к ядру (opensc3/app/core.py, RealCore) сходится с модулями ядра: всё на заглушках, без SC3,
 OBS, PipeWire и udev."""
 import unittest
 from unittest import mock
 
-from sc3linux import guard, hotplug, obs, pipewire, reader
-from sc3linux import protocol as P
-from sc3linux.app.core import ACP_MIN_INTERVAL, LIVE_TIMEOUT, SC3_BUSY, OpenFailed, RealCore
-from sc3linux.model import Link, Live, Sc3State
+from opensc3 import guard, hotplug, obs, pipewire, reader
+from opensc3 import protocol as P
+from opensc3.app.core import ACP_MIN_INTERVAL, LIVE_TIMEOUT, SC3_BUSY, OpenFailed, RealCore
+from opensc3.model import Link, Live, Sc3State
 
 NODES = pipewire.Sc3Nodes(source_id=41, source_name="in", sink_id=42, sink_name="out")
 
@@ -36,7 +36,7 @@ class Contract(unittest.TestCase):
         dev = mock.MagicMock()
         dev.__enter__.return_value = dev
         st = Sc3State(link=Link.CONNECTED)
-        with mock.patch("sc3linux.device.Sc3.open", return_value=dev) as opened, \
+        with mock.patch("opensc3.device.Sc3.open", return_value=dev) as opened, \
                 mock.patch.object(reader, "read_state", return_value=st) as read:
             self.assertIs(self.core.read_state(123.0), st)
         opened.assert_called_once_with()
@@ -45,7 +45,7 @@ class Contract(unittest.TestCase):
 
     def test_open_for_poll(self):
         t = mock.MagicMock()
-        with mock.patch("sc3linux.usb.LibusbTransport", return_value=t), \
+        with mock.patch("opensc3.usb.LibusbTransport", return_value=t), \
                 mock.patch.object(reader, "verify_link", return_value=None):
             session = self.core.open_sc3()
         t.claim.assert_called_once_with()
@@ -55,7 +55,7 @@ class Contract(unittest.TestCase):
     def test_open_busy_closes_transport(self):
         t = mock.MagicMock()
         t.claim.side_effect = P.Sc3Busy()
-        with mock.patch("sc3linux.usb.LibusbTransport", return_value=t), self.assertRaises(OpenFailed) as cm:
+        with mock.patch("opensc3.usb.LibusbTransport", return_value=t), self.assertRaises(OpenFailed) as cm:
             self.core.open_sc3()
         self.assertEqual(cm.exception.note, SC3_BUSY)
         self.assertIsNone(cm.exception.link)       # временно: попробовать позже
@@ -63,7 +63,7 @@ class Contract(unittest.TestCase):
 
     def test_open_foreign_blocks(self):
         t = mock.MagicMock()
-        with mock.patch("sc3linux.usb.LibusbTransport", return_value=t), \
+        with mock.patch("opensc3.usb.LibusbTransport", return_value=t), \
                 mock.patch.object(reader, "verify_link", return_value=Link.FOREIGN), \
                 self.assertRaises(OpenFailed) as cm:
             self.core.open_sc3()
@@ -92,13 +92,13 @@ class Contract(unittest.TestCase):
 
 class Busy(unittest.TestCase):
     def test_cli_says_who_holds_sc3(self):
-        from sc3linux import cli
+        from opensc3 import cli
         self.assertEqual(cli.SC3_BUSY, SC3_BUSY)
-        with mock.patch("sc3linux.device.Sc3.open", side_effect=P.Sc3Busy()), self.assertRaises(P.Sc3Busy) as cm:
+        with mock.patch("opensc3.device.Sc3.open", side_effect=P.Sc3Busy()), self.assertRaises(P.Sc3Busy) as cm:
             cli._open()
         self.assertEqual(str(cm.exception), "SC3 занят другим процессом (окно SC3?)")
         other = P.ProtocolError("не открыть SC3")
-        with mock.patch("sc3linux.device.Sc3.open", side_effect=other), self.assertRaises(P.ProtocolError) as cm:
+        with mock.patch("opensc3.device.Sc3.open", side_effect=other), self.assertRaises(P.ProtocolError) as cm:
             cli._open()
         self.assertEqual(str(cm.exception), "не открыть SC3")
 

@@ -1,9 +1,9 @@
 import QtQuick
-import "../../../sc3linux/app/qml"
+import "../../../opensc3/app/qml"
 
 // Contact sheet of the tray icons: four states (rows) at 22 and 32 px on a Breeze Dark and a
 // Breeze panel strip, plus the 22 px icon blown up x3 with nearest-neighbour sampling so the
-// pixel grid can be checked. Images are the PNGs from ../icons/export.py (sc3linux/app/icons/png).
+// pixel grid can be checked. Images are the PNGs from ../icons/export.py (opensc3/app/icons/png).
 // Root is a plain Rectangle sized by itself, for the off-screen renderer.
 Rectangle {
     id: sheet
@@ -120,7 +120,7 @@ Rectangle {
             id: row
             required property var modelData
             required property int index
-            readonly property string base: "../../../sc3linux/app/icons/png/sc3-" + modelData.key
+            readonly property string base: "../../../opensc3/app/icons/png/sc3-" + modelData.key
             y: sheet.headH + index * sheet.rowH
             width: sheet.width
             height: sheet.rowH

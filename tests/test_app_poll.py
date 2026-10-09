@@ -1,14 +1,14 @@
-"""Лёгкий опрос (sc3linux/app/poll.py): порядок слотов, сетка времени, разбор ответов. Без Qt и без устройства."""
+"""Лёгкий опрос (opensc3/app/poll.py): порядок слотов, сетка времени, разбор ответов. Без Qt и без устройства."""
 import itertools
 import struct
 import unittest
 from dataclasses import replace
 
-from sc3linux import reader as R
-from sc3linux.app import poll
-from sc3linux.app.fake import FakeCore, FakeSession
-from sc3linux.device import Sc3
-from sc3linux.model import Sc3State
+from opensc3 import reader as R
+from opensc3.app import poll
+from opensc3.app.fake import FakeCore, FakeSession
+from opensc3.device import Sc3
+from opensc3.model import Sc3State
 from tests.fake import FakeTransport
 
 Sc3.DELAY = 0

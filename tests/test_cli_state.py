@@ -7,10 +7,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
-from sc3linux import cli
-from sc3linux.device import Sc3
-from sc3linux.model import Link, Live
-from sc3linux.pipewire import Sc3Nodes
+from opensc3 import cli
+from opensc3.device import Sc3
+from opensc3.model import Link, Live
+from opensc3.pipewire import Sc3Nodes
 from tests.fake import FakeTransport
 
 Sc3.DELAY = 0
@@ -25,12 +25,12 @@ class State(unittest.TestCase):
             return Sc3(FakeTransport())
 
         with tempfile.TemporaryDirectory() as d, \
-                mock.patch("sc3linux.obs.live_status", return_value=live), \
-                mock.patch("sc3linux.guard.default_stamp", return_value=Path(d) / "acp-last"), \
-                mock.patch("sc3linux.hotplug.probe", return_value=(link, "/dev/bus/usb/003/007")), \
-                mock.patch("sc3linux.pipewire.find_sc3", return_value=nodes), \
-                mock.patch("sc3linux.pipewire.get_mute", return_value=muted), \
-                mock.patch("sc3linux.pipewire.set_mute", side_effect=AssertionError("CLI не трогает mute")), \
+                mock.patch("opensc3.obs.live_status", return_value=live), \
+                mock.patch("opensc3.guard.default_stamp", return_value=Path(d) / "acp-last"), \
+                mock.patch("opensc3.hotplug.probe", return_value=(link, "/dev/bus/usb/003/007")), \
+                mock.patch("opensc3.pipewire.find_sc3", return_value=nodes), \
+                mock.patch("opensc3.pipewire.get_mute", return_value=muted), \
+                mock.patch("opensc3.pipewire.set_mute", side_effect=AssertionError("CLI не трогает mute")), \
                 mock.patch.object(cli, "_open", fake_open):
             out = io.StringIO()
             with contextlib.redirect_stdout(out):
@@ -69,7 +69,7 @@ class LiveCmd(unittest.TestCase):
         for live, want in (((Live.OFF, None), "эфир: OFF"), ((Live.UNKNOWN, None), "эфир: UNKNOWN"),
                            ((Live.ON, 0.0), "эфир: ON — идёт эфир или запись, с ")):
             out = io.StringIO()
-            with mock.patch("sc3linux.obs.live_status", return_value=live), contextlib.redirect_stdout(out):
+            with mock.patch("opensc3.obs.live_status", return_value=live), contextlib.redirect_stdout(out):
                 self.assertEqual(cli.main(["live"]), 0)
             self.assertTrue(out.getvalue().startswith(want), out.getvalue())
 

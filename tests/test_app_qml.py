@@ -11,7 +11,7 @@ from tests.test_app_backend import spin, wait_until
 
 HAVE_QT = importlib.util.find_spec("PySide6") is not None
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-APP_QML = ROOT / "sc3linux" / "app" / "qml"
+APP_QML = ROOT / "opensc3" / "app" / "qml"
 SCENE = ROOT / "design" / "panel" / "scenes" / "Window.qml"
 app = None
 
@@ -20,11 +20,11 @@ def setUpModule():
     global app
     if not HAVE_QT:
         raise unittest.SkipTest("нет PySide6 (sudo pacman -S pyside6)")
-    logging.getLogger("sc3linux.app").setLevel(logging.ERROR)
+    logging.getLogger("opensc3.app").setLevel(logging.ERROR)
     from PySide6.QtQuick import QQuickWindow  # noqa: F401 — корень Main.qml как QQuickWindow
     from PySide6.QtWidgets import QApplication
 
-    from sc3linux.app.headless import prepare
+    from opensc3.app.headless import prepare
     app = QApplication.instance()
     if app is None:
         prepare(gpu=False)
@@ -66,8 +66,8 @@ class WindowCase(unittest.TestCase):
         from PySide6.QtCore import QUrl
         from PySide6.QtQml import QQmlApplicationEngine
 
-        from sc3linux.app.backend import Backend
-        from sc3linux.app.fake import FakeCore
+        from opensc3.app.backend import Backend
+        from opensc3.app.fake import FakeCore
         core = FakeCore(scenario)
         backend = Backend(core, live_interval=0.2)
         engine = QQmlApplicationEngine()
@@ -89,7 +89,7 @@ class WindowCase(unittest.TestCase):
 
 class MainWindow(WindowCase):
     def test_every_state_without_qml_warnings(self):
-        from sc3linux.app.fake import SCENARIOS
+        from opensc3.app.fake import SCENARIOS
         for scenario in SCENARIOS:
             with self.subTest(scenario=scenario), QmlProblems() as qml:
                 core, _, window = self.open(scenario)
@@ -149,8 +149,8 @@ class Tooltips(unittest.TestCase):
         from PySide6.QtCore import QUrl
         from PySide6.QtQml import QQmlComponent, QQmlEngine
 
-        from sc3linux.app.backend import Backend
-        from sc3linux.app.fake import FakeCore
+        from opensc3.app.backend import Backend
+        from opensc3.app.fake import FakeCore
         tips = ["rgb", "48v", "custom", "custom-A", "custom-B", "custom-C", "custom-D", "mute-onair", "mute-pw",
                 "key-linein", "key-monitor", "key-lineout", "fader-mic", "fader-linein", "fader-hp", "fader-lo",
                 "drag-mic", "drag-linein", "drag-hp", "drag-lo"]

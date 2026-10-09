@@ -13,7 +13,7 @@ from PySide6.QtCore import QObject, QSize
 from PySide6.QtGui import QGuiApplication, QIcon, QPalette
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
-from sc3linux.model import AppState
+from opensc3.model import AppState
 
 from . import view
 

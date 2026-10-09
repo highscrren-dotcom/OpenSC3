@@ -34,12 +34,12 @@ from PySide6.QtCore import (
     Slot,
 )
 
-from sc3linux.model import AppState, AudioState, Link, Live, Sc3State
+from opensc3.model import AppState, AudioState, Link, Live, Sc3State
 
 from . import poll, view
 from .core import Core, OpenFailed
 
-log = logging.getLogger("sc3linux.app")
+log = logging.getLogger("opensc3.app")
 
 LIVE_INTERVAL = 3.0     # статус эфира из OBS
 PROBE_FALLBACK = 3.0    # если hotplug.Watcher не завёлся: проверка присутствия (sysfs, не USB) раз в 3 с

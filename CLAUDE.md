@@ -1,15 +1,17 @@
-# CLAUDE.md — sc3-linux
+# CLAUDE.md — OpenSC3
 
 Приложение под Linux для микшера **fifine AmpliGame SC3** (USB `3142:0c33`, чип MVsilicon BP1048B2): видеть и
 менять его состояние по USB (протокол ACP), кнопки → действия, профили звука, связь с OBS. Отдельный проект с
 07.10.2026; разведка начиналась в `~/dev/stream-style` (оформление стримов владельца).
 Машина разработки и единственная целевая пока — `s1dPC` (CachyOS, KDE Plasma 6.7 Wayland, PipeWire, OBS 32).
 Пишем по-русски; README — на двух языках (англ. основной, `README.ru.md`).
+Имя — **OpenSC3**, лицензия MIT (решение 10): пакет `opensc3`, окно — `opensc3`, CLI — `sc3`; каталог пока
+`~/dev/sc3-linux` (переименует владелец).
 
 ## «Продолжаем» и «закрываем» — порядок из `docs/WORKFLOW.ru.md`
 
 **«Продолжаем»**: `STATE.md` → последняя запись `docs/JOURNAL.md` → `git log`/`status` → **проверить состояние
-исполнением** (`python3 -m sc3linux doctor`, тесты) → доложить в нескольких строках и начать.
+исполнением** (`python3 -m opensc3 doctor`, тесты) → доложить в нескольких строках и начать.
 **«Закрываем»**: проверить исполнением → перезаписать `STATE.md` → дописать запись в `JOURNAL.md` → коммит
 **только по слову владельца** → сказать, чем продолжать.
 
@@ -34,14 +36,15 @@
 ```fish
 python3 -B -m unittest discover -s tests -t .   # без железа
 ruff check .
-python3 -B -m sc3linux doctor                   # без обращения к устройству
-python3 -B -m sc3linux status                   # ~20 чтений ACP — только вне эфира
+python3 -B -m opensc3 doctor                    # без обращения к устройству
+python3 -B -m opensc3 status                    # ~20 чтений ACP — только вне эфира
 ```
 
 ## Каталоги
 
-- **`sc3linux/`** — пакет: `protocol.py` (кадры, белый список, разбор), `usb.py` (libusb через ctypes — единственный,
-  кто говорит с USB), `device.py` (проверка и чтения), `layouts.py` (смысл полей по SDK), `cli.py` (`sc3 …`).
+- **`opensc3/`** — пакет: `protocol.py` (кадры, белый список, разбор), `usb.py` (libusb через ctypes — единственный,
+  кто говорит с USB), `device.py` (проверка и чтения), `layouts.py` (смысл полей по SDK), `cli.py` (`sc3 …`),
+  `app/` (окно и трей, команда `opensc3`).
 - **`tests/`** — unittest, поддельное устройство `fake.py`.
 - **`udev/`** — правило доступа (установлено в `/etc/udev/rules.d/` 07.10).
 - **`docs/`** — `RESEARCH.md` (разведка 07.10: протокол, карта управления, прошивка, пресеты), `PLAN.md` (замысел

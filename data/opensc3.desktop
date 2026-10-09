@@ -1,18 +1,18 @@
 [Desktop Entry]
 Type=Application
 Version=1.5
-Name=SC3
-Name[ru]=SC3
+Name=OpenSC3
+Name[ru]=OpenSC3
 GenericName=Mixer panel
 GenericName[ru]=Панель микшера
 Comment=fifine AmpliGame SC3 on Linux: state, levels, microphone mute
 Comment[ru]=fifine AmpliGame SC3 под Linux: состояние, уровни, заглушение микрофона
-Exec=sc3-panel
+Exec=opensc3
 # Своего значка в теме пока нет (значки трея лежат в пакете): до установки — общий
 Icon=audio-card
 Terminal=false
 Categories=AudioVideo;Audio;Mixer;
-Keywords=fifine;AmpliGame;SC3;mixer;microphone;mute;микшер;микрофон;
+Keywords=OpenSC3;fifine;AmpliGame;SC3;mixer;microphone;mute;микшер;микрофон;
 StartupNotify=true
 SingleMainWindow=true
 X-KDE-StartupNotify=true

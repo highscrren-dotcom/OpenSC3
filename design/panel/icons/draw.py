@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Draw the SC3 tray icons as Plasma "symbolic" SVGs (the source of sc3linux/app/icons/sc3-*.svg).
+"""Draw the SC3 tray icons as Plasma "symbolic" SVGs (the source of opensc3/app/icons/sc3-*.svg).
 
     python3 -B design/panel/icons/draw.py
 
@@ -34,7 +34,7 @@ from PySide6.QtCore import QPointF, QRectF
 from PySide6.QtGui import QPainterPath, QPolygonF
 
 HERE = Path(__file__).resolve().parent
-ICONS = HERE.parents[2] / "sc3linux" / "app" / "icons"  # the app ships them
+ICONS = HERE.parents[2] / "opensc3" / "app" / "icons"  # the app ships them
 GRID_SCALE = 4  # boolean ops run on a 4x finer grid, coordinates are divided back on output
 STATES = ("connected", "muted", "disconnected", "onair", "onair-muted")
 STYLE = ('<style id="current-color-scheme" type="text/css">.ColorScheme-Text { color:#fcfcfc; } '

@@ -1,6 +1,6 @@
 import unittest
 
-from sc3linux import protocol as P
+from opensc3 import protocol as P
 from tests.fake import DESC4
 
 

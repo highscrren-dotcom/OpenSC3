@@ -1,4 +1,4 @@
-"""Окно и трей SC3: `python3 -m sc3linux.app` или `sc3-panel`. Только чтение SC3 (решение 4).
+"""Окно и трей SC3: `python3 -m opensc3.app` или `opensc3`. Только чтение SC3 (решение 4).
 
 Один экземпляр: имя на сессионной шине D-Bus; второй запуск просит первый показать окно и выходит. Закрытие
 окна — в трей (если трей есть). `--fake [сценарий]` — на подделке ядра, без SC3, OBS и PipeWire.
@@ -13,19 +13,19 @@ from pathlib import Path
 
 from .fake import SCENARIOS
 
-APP_ID = "sc3-linux"                       # имя приложения и .desktop (data/sc3-linux.desktop)
-DBUS_SERVICE = "dev.s1dd1.sc3linux"
+APP_ID = "opensc3"                         # имя приложения и .desktop (data/opensc3.desktop)
+DBUS_SERVICE = "dev.s1dd1.opensc3"
 DBUS_PATH = "/Panel"
-DBUS_INTERFACE = "dev.s1dd1.sc3linux.Panel"
+DBUS_INTERFACE = "dev.s1dd1.opensc3.Panel"
 QML_MAIN = Path(__file__).resolve().parent / "qml" / "Main.qml"
 SHOT_SETTLE_MS = 2600                      # --screenshot: первые ответы подделки, эфир, анимации
 SHOT_LIVE_INTERVAL = 1.0
 
-log = logging.getLogger("sc3linux.app")
+log = logging.getLogger("opensc3.app")
 
 
 def parse_args(argv: list[str] | None) -> argparse.Namespace:
-    ap = argparse.ArgumentParser(prog="sc3-panel", description="Окно и трей fifine AmpliGame SC3 (только чтение).")
+    ap = argparse.ArgumentParser(prog="opensc3", description="Окно и трей fifine AmpliGame SC3 (только чтение).")
     ap.add_argument("--fake", nargs="?", const="normal", choices=list(SCENARIOS), metavar="СЦЕНАРИЙ",
                     help="подделка ядра вместо SC3/OBS/PipeWire: " + ", ".join(SCENARIOS) + " (по умолчанию normal)")
     ap.add_argument("--tray", action="store_true", help="запуститься в трей, не показывая окно")
@@ -74,7 +74,7 @@ def claim_single_instance(on_activate):
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="sc3-panel: %(message)s")
+    logging.basicConfig(level=logging.INFO if args.verbose else logging.WARNING, format="opensc3: %(message)s")
     if args.screenshot:
         from .headless import prepare
         prepare(gpu=not args.software)
@@ -84,7 +84,7 @@ def main(argv: list[str] | None = None) -> int:
         from PySide6.QtQuick import QQuickWindow  # noqa: F401 — корень Main.qml придёт как QQuickWindow, не QWindow
         from PySide6.QtWidgets import QApplication, QSystemTrayIcon
     except ImportError:
-        print("sc3-panel: нужен PySide6 — в CachyOS: sudo pacman -S pyside6", file=sys.stderr)
+        print("opensc3: нужен PySide6 — в CachyOS: sudo pacman -S pyside6", file=sys.stderr)
         return 1
     from .backend import LIVE_INTERVAL, Backend
     from .core import RealCore
@@ -92,7 +92,7 @@ def main(argv: list[str] | None = None) -> int:
 
     app = QApplication(sys.argv[:1])
     app.setApplicationName(APP_ID)
-    app.setApplicationDisplayName("SC3")
+    app.setApplicationDisplayName("OpenSC3")
     app.setDesktopFileName(APP_ID)
     app.setQuitOnLastWindowClosed(False)
 
@@ -119,7 +119,7 @@ def main(argv: list[str] | None = None) -> int:
     engine.setInitialProperties({"sc3": backend})
     engine.load(QUrl.fromLocalFile(str(QML_MAIN)))
     if not engine.rootObjects():
-        print(f"sc3-panel: не загрузился {QML_MAIN}", file=sys.stderr)
+        print(f"opensc3: не загрузился {QML_MAIN}", file=sys.stderr)
         return 1
     window = engine.rootObjects()[0]
     window.visibleChanged.connect(backend.set_window_visible)
@@ -164,7 +164,7 @@ def screenshot(app, window, args, QTimer) -> int:
             print(f"ok   {args.screenshot}  {image.width()}x{image.height()}")
             result["rc"] = 0
         else:
-            print(f"sc3-panel: не удалось снять {args.screenshot}", file=sys.stderr)
+            print(f"opensc3: не удалось снять {args.screenshot}", file=sys.stderr)
         app.quit()
 
     QTimer.singleShot(SHOT_SETTLE_MS, grab)

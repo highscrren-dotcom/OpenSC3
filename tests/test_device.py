@@ -1,8 +1,8 @@
 import unittest
 from unittest import mock
 
-from sc3linux import protocol as P
-from sc3linux.device import Sc3
+from opensc3 import protocol as P
+from opensc3.device import Sc3
 from tests.fake import FakeTransport
 
 Sc3.DELAY = 0  # тесты без пауз
@@ -69,7 +69,7 @@ class Open(unittest.TestCase):
         t.close.assert_called_once_with()
 
     def test_busy_is_typed(self):
-        from sc3linux import usb
+        from opensc3 import usb
         self.assertTrue(issubclass(P.Sc3Busy, P.ProtocolError))
         self.assertEqual(str(P.Sc3Busy()), "SC3 занят другим процессом (окно SC3?)")
         tr = object.__new__(usb.LibusbTransport)   # без libusb: только ветка claim

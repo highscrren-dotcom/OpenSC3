@@ -8,7 +8,7 @@ import time
 import unittest
 from unittest import mock
 
-from sc3linux import pipewire as PW
+from opensc3 import pipewire as PW
 
 
 def node(i, cls, name, device=None, **props):

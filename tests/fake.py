@@ -3,7 +3,7 @@
 (настоящие — данные Fifine, в репо их нет: docs/DECISIONS.md, решение 5)."""
 import struct
 
-from sc3linux import protocol as P
+from opensc3 import protocol as P
 
 # Настоящий дескриптор интерфейса 4 SC3 (стандартный USB-дескриптор, снят 07.10.2026)
 DESC4 = bytes.fromhex("0600ff0aaa55a101150026ff00750896000109018102960001090191029508 0901b102c0".replace(" ", ""))

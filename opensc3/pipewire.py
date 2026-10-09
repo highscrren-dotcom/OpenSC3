@@ -128,8 +128,8 @@ def record_cmd(target: str, sink: bool, latency: str = "1024/48000") -> list[str
     """Команда пикового потока. `stdbuf -o0`: pw-record пишет через stdio, иначе 8 байт кадра копились бы
     в буфере 4 КиБ (~20 с). `node.latency` = обычный квант графа — поток не меняет квант устройства."""
     props = {
-        "node.name": "sc3-linux-meter-" + ("out" if sink else "in"),
-        "node.description": "sc3-linux: индикатор " + ("из ПК" if sink else "в ПК"),
+        "node.name": "opensc3-meter-" + ("out" if sink else "in"),
+        "node.description": "OpenSC3: индикатор " + ("из ПК" if sink else "в ПК"),
         "resample.peaks": "true",       # ресемплер отдаёт пик |x| за период, а не звук
         "stream.monitor": "true",       # быстрый конвертер; в задержке соседей не учитывается
         "node.passive": "true",         # не будит спящий узел и не держит его

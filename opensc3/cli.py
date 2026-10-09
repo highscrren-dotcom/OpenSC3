@@ -11,7 +11,7 @@
 status, dump, descriptor и state идут к SC3 только вне эфира (OBS: OFF) и не чаще раза в 5 с (отметка общая
 с окном) — иначе отказ до открытия USB, код 3 (state — JSON с acp_note). Обхода нет.
 
-Запуск из каталога проекта: python3 -m sc3linux <команда>.
+Запуск из каталога проекта: python3 -m opensc3 <команда>.
 """
 from __future__ import annotations
 

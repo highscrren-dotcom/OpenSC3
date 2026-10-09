@@ -26,8 +26,8 @@ POLL_INTERVAL = 0.5         # лёгкий опрос: не больше одн�
 
 def default_stamp() -> Path:
     """Файл отметки в каталоге сеанса ($XDG_RUNTIME_DIR), общий для CLI и окна."""
-    base = os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/sc3-linux-{os.getuid()}"
-    return Path(base) / "sc3-linux" / "acp-last"
+    base = os.environ.get("XDG_RUNTIME_DIR") or f"/tmp/opensc3-{os.getuid()}"
+    return Path(base) / "opensc3" / "acp-last"
 
 
 def _seconds(x: float) -> str:

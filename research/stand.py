@@ -31,12 +31,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))  # `-I` не кладёт в путь ни каталог скрипта, ни текущий: пакет — из этого репо
 
-from sc3linux import hotplug, obs, pipewire
-from sc3linux import layouts as L
-from sc3linux import protocol as P
-from sc3linux.device import Sc3
-from sc3linux.guard import MIN_INTERVAL_FLOOR
-from sc3linux.model import Link, Live
+from opensc3 import hotplug, obs, pipewire
+from opensc3 import layouts as L
+from opensc3 import protocol as P
+from opensc3.device import Sc3
+from opensc3.guard import MIN_INTERVAL_FLOOR
+from opensc3.model import Link, Live
 
 ADC1, MAX_FAILS, LIVE_EVERY, REPORT_EVERY = 0x07, 3, 10.0, 30.0
 FAULTS = ("none", "fail", "unplug", "live", "xrun", "kernel")

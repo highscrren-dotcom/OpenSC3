@@ -1,9 +1,9 @@
 import QtQuick
 import "demo-dsp.js" as DemoDsp
 
-// Fixed demo data in the shape of the app's backend object (sc3linux/app/backend.py, Backend;
-// field meaning: sc3linux/app/view.py): the mock-ups render the app's own QML
-// (sc3linux/app/qml) with this object in place of the live one. Tweaked per frame by Window.qml.
+// Fixed demo data in the shape of the app's backend object (opensc3/app/backend.py, Backend;
+// field meaning: opensc3/app/view.py): the mock-ups render the app's own QML
+// (opensc3/app/qml) with this object in place of the live one. Tweaked per frame by Window.qml.
 QtObject {
     // --- SC3 itself: ACP reads (in the app only at start, reconnect, window shown and «Обновить»)
     property string link: "connected"      // connected | disconnected | no_access | foreign | error

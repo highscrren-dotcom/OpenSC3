@@ -1,8 +1,8 @@
 import QtQuick
-import "../../../sc3linux/app/qml"
+import "../../../opensc3/app/qml"
 
 // One frame of the app window for the mock-ups: the app's own window content
-// (sc3linux/app/qml/Sc3Window.qml) with fixed demo data (DemoState.qml) instead of the
+// (opensc3/app/qml/Sc3Window.qml) with fixed demo data (DemoState.qml) instead of the
 // live backend. Root is an Item so the off-screen renderer can size the frame itself.
 // Initial properties from render.py:
 //   frame: panel | tip-custom | drawer-mic | drawer-voice | drawer-electric |
