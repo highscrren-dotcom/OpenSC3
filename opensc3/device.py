@@ -86,6 +86,11 @@ class Sc3:
     def _read(self, ctrl: int) -> bytes | None:
         return self._transact(P.read_frame(ctrl))
 
+    @property
+    def verified(self) -> bool:
+        """verify() прошёл: дескриптор интерфейса 4 и сборка V22 проверены."""
+        return self._verified
+
     def _need(self) -> None:
         if not self._verified:
             raise P.ProtocolError("сначала verify(): дескриптор и сборка не проверены")

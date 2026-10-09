@@ -64,6 +64,10 @@ class AcpGuard:
             return "эфир неизвестен — OBS не отвечает"
         return ""
 
+    def check_live(self, live: Live) -> str:
+        """Только эфир, без интервала: «» — эфира точно нет. Сеанс записи спрашивает это перед каждым кадром."""
+        return self._live(live)
+
     def check(self, live: Live) -> str:
         """«» — набор чтений разрешён; иначе причина отказа."""
         if note := self._live(live):

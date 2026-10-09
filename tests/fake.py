@@ -20,14 +20,21 @@ BLOCKS = {
 class FakeTransport:
     """`nodes` — значения узлов {адрес: [enable, p1, …]} (остальные узлы — [1, 0, 4096]); `blocks` — тела блоков
     поверх BLOCKS; `silent` — команды, на которые устройство молчит (GET_REPORT отдаст прошлый ответ);
-    `broken` — команды, на которых рвётся транспорт (ProtocolError из set_output)."""
+    `broken` — команды, на которых рвётся транспорт (ProtocolError из set_output); `types` — таблица типов узлов
+    (0x80, индекс 0) вместо синтетической.
+
+    Запись (LEN > 0 в узел) меняет `nodes` и отвечает подтверждением `<узел> 00 00 …` (SDK). `stuck` — узлы, где
+    запись подтверждается, но значение не меняется (его держит прошивка); `no_ack` — запись меняет значение, но
+    подтверждения нет (GET_REPORT отдаст прошлый ответ). `clock` — часы: момент каждого кадра в `times`."""
 
     def __init__(self, version=P.V22_VERSION, desc=DESC4, drop_names=(), nodes=None, blocks=None, silent=(),
-                 broken=()):
+                 broken=(), types=None, stuck=(), no_ack=(), clock=None):
         self.version, self.desc, self.drop_names = version, desc, set(drop_names)
-        self.nodes, self.blocks = dict(nodes or {}), dict(blocks or {})
+        self.nodes, self.blocks = {a: list(v) for a, v in (nodes or {}).items()}, dict(blocks or {})
         self.silent, self.broken = set(silent), set(broken)
+        self.types, self.stuck, self.no_ack, self.clock = types, set(stuck), set(no_ack), clock
         self.sent, self.last, self.claimed, self.closed = [], bytes(256), False, False
+        self.writes, self.times = [], []  # writes: (узел, индекс, значения) — что устройство приняло
 
     def claim(self):
         self.claimed = True
@@ -42,13 +49,26 @@ class FakeTransport:
         r[4 + len(body)] = 0x16
         self.last = bytes(r)
 
+    def _write(self, ctrl, frame):
+        idx, (value,) = frame[4], struct.unpack("<h", frame[5:7])  # один параметр: индекс = место в ответе чтения
+        self.writes.append((ctrl, idx, value))
+        if ctrl not in self.stuck:
+            self.nodes.setdefault(ctrl, [1, 0, 4096])[idx] = value
+        if ctrl not in self.no_ack:
+            self.last = bytes([ctrl]) + bytes(255)
+
     def set_output(self, frame):
         P.check_frame(frame)  # настоящий транспорт делает то же
         self.sent.append(bytes(frame))
+        if self.clock is not None:
+            self.times.append(self.clock())
         ctrl = frame[2]
         if ctrl in self.broken:
             raise P.ProtocolError(f"control 0x21/0x09: LIBUSB_ERROR_NO_DEVICE ({ctrl:#04x})")
         if ctrl in self.silent:
+            return
+        if frame[3] and ctrl != P.NAMES:
+            self._write(ctrl, frame)
             return
         if ctrl in self.blocks:
             self._reply(ctrl, self.blocks[ctrl])
@@ -62,7 +82,8 @@ class FakeTransport:
         elif ctrl == P.NAMES:
             i = frame[4]
             if i == 0:
-                types = b"".join(struct.pack("<H", 15 if k >= 38 else k % 30) for k in range(P.NODE_COUNT))
+                table = self.types or [15 if k >= 38 else k % 30 for k in range(P.NODE_COUNT)]
+                types = b"".join(struct.pack("<H", t) for t in table)
                 self._reply(ctrl, bytes([0, P.NODE_COUNT]) + types)
             elif i not in self.drop_names:
                 self._reply(ctrl, bytes([i]) + f"1:Fake {i}".encode())

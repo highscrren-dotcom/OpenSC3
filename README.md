@@ -7,9 +7,10 @@ MVsilicon BP1048B2). FIFINE ships no software for the SC3 at all; on Linux it wo
 and everything else — mute state, gains, the built-in EQ and voice effects, the auto-tune key — sits behind a
 vendor HID interface that the kernel does not bind. This project talks to it directly.
 
-**Status: pre-alpha.** Read-only so far: the CLI can check the setup, print a readable status and dump every
-readable block and effect node; the window (Qt) shows the mixer's state, levels and microphone mute. Nothing is
-written to the mixer. Plans — [docs/PLAN.md](docs/PLAN.md) (Russian).
+**Status: pre-alpha.** Mostly read-only: the CLI can check the setup, print a readable status and dump every
+readable block and effect node; the window (Qt) shows the mixer's state, levels and microphone mute. Writing to
+the mixer (mic trim, voice EQ, noise gate) exists behind a whitelist and a dry run by default — `sc3 … --write`
+is experimental, see [docs/WRITE.md](docs/WRITE.md) (Russian). Plans — [docs/PLAN.md](docs/PLAN.md) (Russian).
 
 ## Safety first
 

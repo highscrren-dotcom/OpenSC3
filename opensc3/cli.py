@@ -1,4 +1,4 @@
-"""sc3 — командная строка к микшеру fifine SC3. Только чтение.
+"""sc3 — командная строка к микшеру fifine SC3. Чтение; запись — только по белому списку (docs/WRITE.md).
 
   sc3 doctor              подключён ли SC3, есть ли права (udev), всё ли на месте — ничего не шлёт устройству
   sc3 status              сводка: сборка, микрофон, гейт, эффекты, EQ, усиления (~20 чтений ACP)
@@ -8,8 +8,15 @@
   sc3 live                идёт ли эфир или запись в OBS (GetStreamStatus, GetRecordStatus) — к SC3 не обращается
   sc3 state               состояние для окна (JSON): эфир → разрешение на ACP → один набор чтений (8) + PipeWire
 
-status, dump, descriptor и state идут к SC3 только вне эфира (OBS: OFF) и не чаще раза в 5 с (отметка общая
-с окном) — иначе отказ до открытия USB, код 3 (state — JSON с acp_note). Обхода нет.
+Запись (этап 3; по умолчанию — сухой прогон: план и кадры, к SC3 не обращается; отправка — только с --write):
+  sc3 params              что можно писать: ключи белого списка, узлы, границы
+  sc3 set <ключ> <знач.>  один параметр, например `sc3 set mic.trim 1`; --from дамп.json — «как было» из дампа
+  sc3 profile show|diff|apply <имя>   профиль (podcast): значения / сравнение с SC3 или дампом / запись
+  sc3 undo                вернуть исходные значения последнего сеанса записи (по журналу)
+
+status, dump, descriptor, state, profile diff и запись идут к SC3 только вне эфира (OBS: OFF) и не чаще раза в 5 с
+(отметка общая с окном) — иначе отказ до открытия USB, код 3 (state — JSON с acp_note). Обхода нет. Запись — ещё и
+не чаще одного кадра за 0,5 с, с чтением назад и откатом (write.py).
 
 Запуск из каталога проекта: python3 -m opensc3 <команда>.
 """
@@ -325,6 +332,147 @@ def cmd_state(_a) -> int:
     return 0 if sc3.link in (Link.CONNECTED, Link.DISCONNECTED, Link.NO_ACCESS) else 2
 
 
+def _state_from(path: str | None) -> dict[int, list[int]] | None:
+    """Снимок узлов из дампа `sc3 dump` (без обращения к SC3) или None."""
+    if path is None:
+        return None
+    from .write import state_from_dump
+    return state_from_dump(json.loads(Path(path).read_text(encoding="utf-8")))
+
+
+def _show_plan(plan, state_known: bool) -> None:
+    for line in plan.lines():
+        print("  " + line)
+    if not plan.writes:
+        print("  писать нечего: всё уже так")
+        return
+    if state_known:
+        print("откат («как было»), в обратном порядке:")
+        for w in reversed(plan.writes):
+            print("  " + w.undo().describe())
+    else:
+        print("исходные значения неизвестны: снимок узлов снимается перед записью, по нему же уточнится порядок "
+              "(--from дамп.json — посмотреть заранее)")
+    n = len(plan.writes)
+    print(f"кадров записи: {n} — не чаще одного за 0,5 с, после каждого чтение назад (≈ {n * 0.5:.0f} с)")
+
+
+def _write(plan, what: str, undoes: str | None = None) -> int:
+    """Отправка: эфир (OBS) → AcpGuard → открыть SC3 → write.apply (verify, типы узлов, снимок, по кадру раз в 0,5 с,
+    чтение назад, откат при расхождении, журнал). Отказ — до открытия USB. Перед каждым кадром apply спрашивает
+    OBS заново (`live_status`), а не верит ответу, полученному здесь."""
+    from . import write as W
+    from .guard import AcpGuard, default_stamp
+    from .obs import live_status
+    live, _since = live_status()
+    guard = AcpGuard(stamp=default_stamp())
+    note = guard.check(live)
+    if note:
+        raise Refused(note)
+    journal = W.Journal(W.default_journal(), what=what, undoes=undoes)
+    try:
+        with _open() as s:
+            res = W.apply(s, plan, live=lambda: live_status()[0], guard=guard, journal=journal)
+    except W.WriteRefused as e:
+        for d in e.done:
+            print(f"  записано до отказа: {d.write.describe()}")
+        if e.done:
+            print("вернуть после эфира: sc3 undo --write")
+        raise Refused(str(e)) from None
+    for d in res.done:
+        print(f"✓ {d.write.describe()}" + ("" if d.ack else "   (без подтверждения; чтение назад сошлось)"))
+    for w in res.skipped:
+        print(f"• {w.param.key}: пропуск — сейчас {w.param.fmt(w.before)}, сеанс оставил {w.param.fmt(w.expect)}; "
+              "не трогаю")
+    if not res.done and not res.skipped:
+        print("писать было нечего: всё уже так")
+    if res.done:
+        print(f"записано кадров: {len(res.done)}; журнал: {journal.path}" +
+              (f" — НЕ ДОПИСАН ({journal.broken}): исходные значения — в строках выше" if journal.broken else ""))
+        print("вернуть как было: sc3 undo --write; полный сброс — выдернуть USB (вне эфира)")
+    return 0
+
+
+def cmd_params(_a) -> int:
+    from .write import PARAMS, human
+    for p in PARAMS:
+        if p.key.startswith("eq.") and p.key.split(".")[1] != "1":
+            continue
+        lo, hi = human(p.unit, p.lo), human(p.unit, p.hi)
+        print(f"{p.key:<14} {p.addr:#04x}[{p.idx:>2}]  {lo} … {hi:<14} {p.text}")
+    print("eq.N.* — фильтры N = 1…10 (показан первый). Включённый фильтр — всегда с частотой 20…20000 Гц и Q 0,3…8")
+    return 0
+
+
+def cmd_set(a) -> int:
+    from .write import plan_write
+    state = _state_from(a.source)
+    plan = plan_write([(a.key, a.value)], state)
+    if a.write:
+        return _write(plan, f"set {a.key} {a.value}")
+    print("сухой прогон — к SC3 не обращаюсь (отправить: --write)")
+    _show_plan(plan, state is not None)
+    return 0
+
+
+def cmd_profile(a) -> int:
+    from .profiles import PROFILES, diff, lines
+    from .write import plan_write
+    prof = PROFILES.get(a.name)
+    if prof is None:
+        print(f"✗ профиля «{a.name}» нет; есть: {', '.join(PROFILES)}", file=sys.stderr)
+        return 1
+    if a.action == "show":
+        print(f"{prof.title} ({prof.name}){' — черновик' if prof.draft else ''}:")
+        for line in lines(prof):
+            print("  " + line)
+        for n in prof.notes:
+            print("• " + n)
+        return 0
+    state = _state_from(a.source)
+    if a.action == "diff":
+        if state is None:  # только чтение: те же эфир и AcpGuard, что у status
+            from .write import snapshot, target
+            with _acp() as s:
+                s.verify()
+                state = snapshot(s, {target(k, v).param.addr for k, v in prof.items})
+        rows = diff(prof, state)
+        for r in rows:
+            print(f"  {'=' if r.same else '≠'} {r.key:<14} сейчас {r.now:<14} в профиле {r.target}")
+        print(f"отличается: {sum(not r.same for r in rows)} из {len(rows)}")
+        return 0
+    plan = plan_write(prof.items, state)
+    if a.write:
+        return _write(plan, f"profile {prof.name}")
+    print(f"сухой прогон профиля «{prof.title}» — к SC3 не обращаюсь (отправить: --write)")
+    _show_plan(plan, state is not None)
+    return 0
+
+
+def cmd_undo(a) -> int:
+    from .write import default_journal, last_session, plan_write, undo_writes
+    rows = last_session(default_journal())
+    writes = undo_writes(rows)
+    if not writes:
+        print("возвращать нечего: журнал пуст или последний сеанс ничего не изменил")
+        return 0
+    plan = plan_write(writes)
+    session = rows[0]["session"]
+    if a.write:
+        return _write(plan, f"undo {session}", undoes=session)
+    print(f"сухой прогон отката сеанса {session} ({rows[0].get('what') or '?'}) — к SC3 не обращаюсь "
+          "(отправить: --write)")
+    for w in plan.writes:
+        print(f"  {w.param.key:<14} → {w.param.fmt(w.value)} (если сейчас {w.param.fmt(w.expect)})   {w.hex()}")
+    return 0
+
+
+def _send_flags(p) -> None:
+    g = p.add_mutually_exclusive_group()
+    g.add_argument("--dry-run", action="store_true", help="только план и кадры (по умолчанию)")
+    g.add_argument("--write", action="store_true", help="отправить в SC3 (вне эфира)")
+
+
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="sc3", description=__doc__.split("\n")[0])
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -339,7 +487,25 @@ def main(argv=None) -> int:
     li.set_defaults(fn=cmd_listen)
     sub.add_parser("live").set_defaults(fn=cmd_live)
     sub.add_parser("state").set_defaults(fn=cmd_state)
+    sub.add_parser("params").set_defaults(fn=cmd_params)
+    st = sub.add_parser("set")
+    st.add_argument("key")
+    st.add_argument("value")
+    st.add_argument("--from", dest="source", metavar="ДАМП")
+    _send_flags(st)
+    st.set_defaults(fn=cmd_set)
+    pr = sub.add_parser("profile")
+    pr.add_argument("action", choices=("show", "diff", "apply"))
+    pr.add_argument("name")
+    pr.add_argument("--from", dest="source", metavar="ДАМП")
+    _send_flags(pr)
+    pr.set_defaults(fn=cmd_profile)
+    un = sub.add_parser("undo")
+    _send_flags(un)
+    un.set_defaults(fn=cmd_undo)
     a = ap.parse_args(argv)
+    if getattr(a, "write", False) and getattr(a, "source", None):
+        ap.error("--from — только для сухого прогона: перед записью снимок снимается с самого SC3")
     try:
         return a.fn(a)
     except Refused as e:

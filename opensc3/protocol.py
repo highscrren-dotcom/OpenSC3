@@ -4,8 +4,10 @@
 Report ID) и GET_REPORT Input. Устройство само ничего не шлёт и на непонятную команду отдаёт ПРЕДЫДУЩИЙ ответ,
 поэтому ctrl ответа сверяется всегда. Подробно — docs/RESEARCH.md, разделы 4 и 12.
 
-Здесь только ЧТЕНИЕ. Кадров записи в этом модуле нет; запись появится отдельным белым списком с тестами
-(docs/DECISIONS.md, решение 4). Запреты — исключениями, а не assert: `python -O` их не отключит.
+Кадры собирает только `frame()`, и каждый сразу проходит `check_frame`. Запись (этап 3, docs/WRITE.md) — один
+параметр узла: `A5 5A <узел> 03 <idx> <int16 LE> 16`. Какие узлы, параметры и границы — белый список в write.py
+(данные); `check_frame` спрашивает его последним рубежом перед USB, а запреты ниже действуют независимо от него.
+Запреты — исключениями, а не assert: `python -O` их не отключит.
 """
 from __future__ import annotations
 
@@ -29,6 +31,11 @@ READ_CTRLS = frozenset(SYSTEM) | frozenset(range(NODE_MIN, NODE_MAX + 1)) | {SCR
 # 0x11 — запись во флеш, 0xFB — длина без проверки, 0xFD — вне массива узлов, 0xFE — OTA (уход в загрузчик),
 # 0xFF — шифрование (в одном бите от 0xFE). Не посылаются никогда, ни в каком виде.
 NEVER = frozenset((0x11, 0xFB, 0xFD, 0xFE, 0xFF))
+# Запись — только в узлы 0x81…0xB6 и никогда в узел ползунка Line In (его держит ползунок, как громкость 0x07 —
+# ползунок Mic). Блоки системы (0x00–0x0D: сон/сброс 0x01, громкость 0x07), 0x80 и 0xFC не пишутся вовсе.
+LINE_IN_FADER = 0xB6
+WRITE_NEVER = frozenset({LINE_IN_FADER})
+WRITE_LEN = 3  # один параметр: индекс + int16. Группы (DRC) и «все параметры сразу» (0xFF) — нет
 
 SAMPLE_RATES = (8000, 11025, 12000, 16000, 22050, 24000, 32000, 44100, 48000)
 
@@ -47,7 +54,8 @@ class Sc3Busy(ProtocolError):
 
 
 def check_frame(f: bytes) -> bytes:
-    """Единственные кадры, которые можно послать: чтение из белого списка и имя узла 0…54."""
+    """Единственные кадры, которые можно послать: чтение из белого списка, имя узла 0…54 и запись одного
+    параметра узла из белого списка записи (write.py)."""
     if len(f) < 5 or f[0] != 0xA5 or f[1] != 0x5A:
         raise ProtocolError(f"не кадр ACP: {f.hex(' ')}")
     ctrl, ln = f[2], f[3]
@@ -58,20 +66,43 @@ def check_frame(f: bytes) -> bytes:
     if ctrl == NAMES:
         if ln != 1 or f[4] > NODE_COUNT:
             raise ProtocolError(f"0x80 — только с одним байтом-индексом 0…{NODE_COUNT}: {f.hex(' ')}")
-    elif ctrl not in READ_CTRLS:
-        raise ProtocolError(f"команды {ctrl:#04x} нет в белом списке чтения")
-    elif ln != 0:
-        raise ProtocolError(f"запись запрещена: {ctrl:#04x} с LEN={ln}")
+    elif ln == 0:
+        if ctrl not in READ_CTRLS:
+            raise ProtocolError(f"команды {ctrl:#04x} нет в белом списке чтения")
+    else:
+        _check_write(f)
     return f
 
 
+def _check_write(f: bytes) -> None:
+    """Кадр записи: сначала запреты, не зависящие от белого списка, потом сам белый список (write.py)."""
+    ctrl, ln = f[2], f[3]
+    if not NODE_MIN <= ctrl <= NODE_MAX:
+        raise ProtocolError(f"запись запрещена: {ctrl:#04x} — не узел эффектов (с LEN={ln})")
+    if ctrl in WRITE_NEVER:
+        raise ProtocolError(f"запись запрещена: узел {ctrl:#04x} держит ползунок")
+    if ln != WRITE_LEN or f[4] == 0xFF:
+        raise ProtocolError(f"запись — только один параметр (LEN {WRITE_LEN}): {ctrl:#04x} с LEN={ln}")
+    from .write import check_write_frame  # здесь, а не сверху: write.py сам строит кадры через этот модуль
+    check_write_frame(f)
+
+
+def frame(ctrl: int, body: bytes = b"") -> bytes:
+    """`A5 5A <ctrl> <len> <тело> 16` — единственный построитель кадров. Кадр сразу проходит `check_frame`:
+    вне белых списков его не собрать вовсе."""
+    body = bytes(body)
+    if len(body) > REPORT - 5:
+        raise ProtocolError(f"тело {len(body)} байт не влезает в отчёт {REPORT}")
+    return check_frame(bytes([0xA5, 0x5A, ctrl, len(body)]) + body + b"\x16")
+
+
 def read_frame(ctrl: int) -> bytes:
-    return check_frame(bytes([0xA5, 0x5A, ctrl, 0x00, 0x16]))
+    return frame(ctrl)
 
 
 def name_frame(index: int) -> bytes:
     """0x80 с индексом: 0 — таблица типов узлов, 1…54 — имя узла 0x80 + индекс."""
-    return check_frame(bytes([0xA5, 0x5A, NAMES, 0x01, index, 0x16]))
+    return frame(NAMES, bytes([index]))
 
 
 def reply_body(r: bytes, ctrl: int, echo: int | None = None) -> bytes | None:
@@ -82,6 +113,14 @@ def reply_body(r: bytes, ctrl: int, echo: int | None = None) -> bytes | None:
     if echo is not None and (len(body) < 1 or body[0] != echo):
         return None
     return body
+
+
+def write_ack(r: bytes, ctrl: int) -> bool:
+    """Подтверждение записи: отчёт `<ctrl> 00 00 …` — адрес узла и нули (SDK, хвост Communication_Effect_Config:
+    обнулить буфер, первый байт = ctrl). Устаревший ответ (прошлое чтение `A5 5A …`) так не выглядит, а прошлое
+    подтверждение того же узла — выглядит: поэтому перед записью узел всегда читается (write.py). Подтверждение —
+    лишь подсказка; истина — чтение назад."""
+    return len(r) >= 2 and r[0] == ctrl and not any(r[1:])
 
 
 def node_values(body: bytes) -> list[int]:

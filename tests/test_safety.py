@@ -5,6 +5,7 @@ import pathlib
 import re
 import subprocess
 import unittest
+import unittest.mock
 
 from opensc3 import protocol as P
 
@@ -89,50 +90,235 @@ class Fifine(unittest.TestCase):
         self.assertFalse(NODE_NAME.search('f"1:Fake {i}" и 12:30 и 0x86'))
 
 
-class Frames(unittest.TestCase):
-    """Кадры записи (LEN > 0) не строятся нигде; единственное исключение — 0x80 с байтом-индексом."""
+def functions_of(tree):
+    """Узел AST → имя ближайшей объемлющей функции (None — уровень модуля)."""
+    owner = {}
 
-    def test_frame_literals_only_in_protocol(self):
+    def walk(node, fn):
+        for child in ast.iter_child_nodes(node):
+            name = child.name if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef)) else fn
+            owner[child] = name
+            walk(child, name)
+
+    walk(tree, None)
+    return owner
+
+
+def parents_of(tree):
+    return {child: node for node in ast.walk(tree) for child in ast.iter_child_nodes(node)}
+
+
+def refs(tree, name):
+    """Все упоминания имени: `name`, `x.name`, вызовы и передача без вызова (`f = W.apply`)."""
+    return [n for n in ast.walk(tree) if (isinstance(n, ast.Name) and n.id == name) or
+            (isinstance(n, ast.Attribute) and n.attr == name)]
+
+
+# Жёсткие пределы записи — числа самого сторожа, не из write.py: расширить белый список шире них нельзя, не
+# поправив и этот тест (docs/WRITE.md, «Белый список»).
+HARD = {"eq_f0": (20, 20000), "eq_q": (307, 8192), "eq_gain": 3840, "trim": (410, 12953),  # −20…+10 дБ в Q12
+        "gate_threshold": (-8000, -2000), "gate_ratio": (1, 10), "gate_ms": (1, 2000)}
+
+
+# Узлы, в которые можно писать (docs/WRITE.md). Новый узел — новая категория записи: только по разрешению владельца
+# (решение 4) и только вместе с правкой этой строки.
+WRITE_NODES = {0x82: "шумодав микрофона", 0xA2: "EQ голоса", 0xAC: "поправка MIC", 0xAE: "поправка LINE IN"}
+VOICE_NODES = range(0x83, 0x8D)  # голоса, автотюн (ELECTRIC), эхо, ревербераторы — их переписывает кнопка панели
+HARD_NO = [*range(P.NODE_MIN), P.LINE_IN_FADER, *range(P.NODE_MAX + 1, 0x100)]  # блоки, 0x11, 0x80, 0xB6, > 0xB6
+
+
+class Frames(unittest.TestCase):
+    """Кадры собирает только `protocol.frame`; кадры с телом (LEN > 0) — только имена 0x80 (protocol.py) и запись
+    одного параметра (write.py, по белому списку). `check_frame` пропускает запись только из белого списка, а блоки
+    системы (0x01, 0x07 …), 0x11, 0xFB–0xFF, всё выше 0xB6 и ползунок 0xB6 — никогда, даже если список расширят."""
+
+    def test_frame_literals_only_in_frame_builder(self):
         for f in sources():
             tree = ast.parse(f.read_text())
+            owner = functions_of(tree)
             for n in ast.walk(tree):
-                if isinstance(n, (ast.List, ast.Tuple)) and len(n.elts) >= 4 and \
+                if isinstance(n, (ast.List, ast.Tuple)) and len(n.elts) >= 2 and \
                         all(isinstance(e, ast.Constant) for e in n.elts[:2]) and \
                         [e.value for e in n.elts[:2]] == [0xA5, 0x5A]:
-                    self.assertEqual(f.name, "protocol.py", f"кадр собирается в {rel(f)}:{n.lineno}")
-                    ctrl, ln = n.elts[2], n.elts[3]
-                    ok = isinstance(ln, ast.Constant) and (ln.value == 0 or (
-                        ln.value == 1 and isinstance(ctrl, ast.Name) and ctrl.id == "NAMES"))
-                    self.assertTrue(ok, f"кадр с LEN > 0 в {rel(f)}:{n.lineno}")
+                    self.assertEqual((rel(f), owner[n]), ("protocol.py", "frame"),
+                                     f"кадр собирается в {rel(f)}:{n.lineno}")
+                if isinstance(n, ast.Constant) and isinstance(n.value, bytes) and n.value[:2] == b"\xa5\x5a":
+                    self.fail(f"кадр байтами в {rel(f)}:{n.lineno}")
                 if isinstance(n, ast.Constant) and isinstance(n.value, str) and \
                         re.match(r"(?i)\s*a5\s*5a", n.value):
                     self.fail(f"кадр строкой hex в {rel(f)}:{n.lineno}")
 
-    def test_check_frame_rejects_every_write(self):
+    def test_bodies_only_for_names_and_write(self):
+        """`frame(ctrl, тело)` — только имя узла (protocol.name_frame) и запись (write.write_frame)."""
+        allowed = {("protocol.py", "name_frame"), ("write.py", "write_frame")}
+        found = set()
+        for f in sources():
+            tree = ast.parse(f.read_text())
+            owner = functions_of(tree)
+            for c in calls(tree, "frame"):
+                if len(c.args) > 1 or c.keywords:
+                    self.assertIn((rel(f), owner[c]), allowed, f"кадр с телом в {rel(f)}:{c.lineno}")
+                    found.add((rel(f), owner[c]))
+        self.assertEqual(found, allowed)
+
+    def test_write_path_only_in_write_module(self):
+        """Кадры записи строит и шлёт только write.py; check_frame спрашивает его белый список. Упоминание считается
+        и без вызова (`f = W.write_frame`), а `.frame` у Write вне write.py — уже обход `apply`."""
+        allowed = {"write_frame": {"write.py"}, "check_write_frame": {"protocol.py", "write.py"},
+                   "write_ack": {"protocol.py", "write.py"}, "_send": {"write.py"}, "_step": {"write.py"},
+                   "_rollback": {"write.py"}, "set_output": {"device.py", "write.py", "usb.py"},
+                   "_transact": {"device.py"}, "apply": {"write.py", "cli.py"}}
+        for f in sources():
+            tree = ast.parse(f.read_text())
+            for name, where in allowed.items():
+                for n in refs(tree, name):
+                    self.assertIn(rel(f), where, f"{name} в {rel(f)}:{n.lineno}")
+            if rel(f) not in ("write.py", "protocol.py"):
+                for n in ast.walk(tree):
+                    if isinstance(n, ast.Attribute) and n.attr == "frame":
+                        self.fail(f"кадр записи (.frame) вне write.py: {rel(f)}:{n.lineno}")
+
+    def test_send_sites(self):
+        """set_output зовут только Sc3._transact (кадр чтения) и write._send; _transact — только с кадром чтения или
+        имени, собранным тут же (`P.read_frame(…)`, `P.name_frame(…)`)."""
+        for name, owner_ok in (("device.py", {"_transact"}), ("write.py", {"_send"})):
+            tree = ast.parse((PKG / name).read_text())
+            owner = functions_of(tree)
+            for c in calls(tree, "set_output"):
+                self.assertIn(owner[c], owner_ok, f"set_output в {name}:{c.lineno}")
+        tree = ast.parse((PKG / "device.py").read_text())
+        for c in calls(tree, "_transact"):
+            arg = c.args[0] if c.args else None
+            self.assertTrue(isinstance(arg, ast.Call) and isinstance(arg.func, ast.Attribute) and
+                            arg.func.attr in ("read_frame", "name_frame"), f"_transact не с кадром чтения: {c.lineno}")
+
+    def test_check_frame_accepts_only_whitelist(self):
+        from opensc3 import write as W
+        accepted = set()
         for ctrl in range(256):
-            f = bytes([0xA5, 0x5A, ctrl, 0x01, 0x01, 0x16])
-            if ctrl == P.NAMES:
-                continue
-            with self.assertRaises(P.ProtocolError, msg=f"{ctrl:#04x}"):
-                P.check_frame(f)
+            for idx in [*range(64), 0xFF]:
+                for v in (-0x8000, -9000, -1, 0, 1, 2, 80, 4096, W.q12(10), 0x3FFF, 0x7FFF):
+                    f = bytes([0xA5, 0x5A, ctrl, 3, idx]) + v.to_bytes(2, "little", signed=True) + b"\x16"
+                    try:
+                        P.check_frame(f)
+                    except P.ProtocolError:
+                        continue
+                    p = W.BY_SLOT.get((ctrl, idx))
+                    self.assertIsNotNone(p, f.hex(" "))
+                    self.assertTrue(p.lo <= v <= p.hi, f.hex(" "))
+                    accepted.add(ctrl)
+        self.assertEqual(accepted, set(WRITE_NODES))
+        for ctrl in range(256):  # любая другая длина тела, кроме имени узла 0x80, — отказ
+            for ln in (1, 2, 4, 5, 7, 53 * 2 + 1):
+                if ctrl == P.NAMES and ln == 1:
+                    continue
+                f = bytes([0xA5, 0x5A, ctrl, ln, 2]) + bytes(ln - 1) + b"\x16"
+                with self.assertRaises(P.ProtocolError, msg=f"{ctrl:#04x} LEN={ln}"):
+                    P.check_frame(f)
+
+    def test_hard_bans_hold_even_if_whitelist_widens(self):
+        from opensc3 import write as W
+        wide = {(c, i): W.Param(f"x{c}.{i}", c, i, -0x8000, 0x7FFF, "hz", "")
+                for c in HARD_NO for i in (0, 1, 2, 3, 0xFF)}
+        with unittest.mock.patch.dict(W.BY_SLOT, wide):
+            for (c, i) in wide:
+                f = bytes([0xA5, 0x5A, c, 3, i, 0x01, 0x00, 0x16])
+                with self.assertRaises(P.ProtocolError, msg=f.hex(" ")):
+                    P.check_frame(f)
+        for c in (0x01, 0x07, 0x11, 0x80, 0xB6, 0xB7, 0xC0, 0xFA, 0xFB, 0xFC, 0xFD, 0xFE, 0xFF):
+            self.assertIn(c, HARD_NO)
+
+    def test_whitelist_shape(self):
+        from opensc3 import write as W
+        self.assertEqual({p.addr for p in W.PARAMS}, set(WRITE_NODES))
+        self.assertEqual(set(W.NODE_TYPES), set(WRITE_NODES))
+        self.assertEqual(len(W.BY_SLOT), len(W.PARAMS))  # без повторов (узел, индекс)
+        for p in W.PARAMS:
+            self.assertTrue(P.NODE_MIN <= p.addr <= P.NODE_MAX and p.addr not in P.WRITE_NEVER, p.key)
+            self.assertNotIn(p.addr, VOICE_NODES, p.key)
+            self.assertTrue(-0x8000 <= p.lo <= p.hi <= 0x7FFF, p.key)
+            t = W.NODE_TYPES[p.addr]
+            if t == W.GAIN_T:  # только усиление (индекс 2), не mute и не выключение; −20…+10 дБ
+                self.assertEqual(p.idx, 2, p.key)
+                self.assertTrue(HARD["trim"][0] <= p.lo and p.hi <= HARD["trim"][1], p.key)
+            elif t == W.EQ_T:  # только фильтры: число фильтров, предусиление и включение EQ — нет
+                self.assertTrue(3 <= p.idx <= 52, p.key)
+                field = (p.idx - 3) % 5  # вкл., тип, частота, Q, усиление
+                limit = {0: (0, 1), 1: (0, 6), 2: (0, HARD["eq_f0"][1]), 3: (0, HARD["eq_q"][1]),
+                         4: (-HARD["eq_gain"], HARD["eq_gain"])}[field]
+                self.assertTrue(limit[0] <= p.lo and p.hi <= limit[1], p.key)
+            elif t == W.EXPANDER_T:
+                limit = {0: (0, 1), 1: HARD["gate_threshold"], 2: HARD["gate_ratio"], 3: HARD["gate_ms"],
+                         4: HARD["gate_ms"]}[p.idx]
+                self.assertTrue(limit[0] <= p.lo and p.hi <= limit[1], p.key)
+            else:
+                self.fail(f"{p.key}: тип узла {t} не предусмотрен")
+
+    def test_enabled_filter_limits(self):
+        """Включённый фильтр EQ — с частотой ≥ 20 Гц и Q ≥ 307 (0,3): нули и малые значения — только у выключенного."""
+        from opensc3 import write as W
+        self.assertTrue(W.EQ_FREQ[0] >= HARD["eq_f0"][0] and W.EQ_Q[0] >= HARD["eq_q"][0])
+        eq = [1, 0, 0] + [0] * 50
+        state = {W.VOICE_EQ: eq}
+        for f0, q in ((HARD["eq_f0"][0] - 1, 1024), (1000, HARD["eq_q"][0] - 1), (0, 0)):
+            items = [W.Write(W.BY_KEY["eq.5.freq"], f0), W.Write(W.BY_KEY["eq.5.q"], q), W.Write(W.BY_KEY["eq.5.on"], 1)]
+            with self.assertRaises(W.WriteError, msg=(f0, q)):
+                W.plan_write(items, state)
+        W.plan_write([("eq.5.freq", HARD["eq_f0"][0]), ("eq.5.q", HARD["eq_q"][0] / 1024), ("eq.5.on", 1)], state)
 
     def test_transport_checks_every_frame(self):
         tree = ast.parse((PKG / "usb.py").read_text())
         fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "set_output")
         self.assertTrue(calls(fn, "check_frame"), "set_output обязан звать check_frame")
 
+    def test_frame_builder_checks(self):
+        tree = ast.parse((PKG / "protocol.py").read_text())
+        fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "frame")
+        self.assertTrue(calls(fn, "check_frame"), "frame обязан звать check_frame")
+
 
 class Cli(unittest.TestCase):
     def test_usb_opened_only_behind_live_check(self):
-        """В cli.py SC3 открывается только в `_acp` (status/dump/descriptor) и в `cmd_state` — оба сначала
-        спрашивают OBS и AcpGuard."""
+        """В cli.py SC3 открывается только в `_acp` (status/dump/descriptor/profile diff), `cmd_state` и `_write`
+        (запись) — все сначала спрашивают OBS и AcpGuard."""
         tree = ast.parse((PKG / "cli.py").read_text())
         for fn in (n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef)):
             if calls(fn, "_open") or calls(fn, "open") and "Sc3" in ast.unparse(fn):
                 if fn.name == "_open":
                     continue
-                self.assertIn(fn.name, ("_acp", "cmd_state"), f"SC3 открывается в {fn.name}")
+                self.assertIn(fn.name, ("_acp", "cmd_state", "_write"), f"SC3 открывается в {fn.name}")
                 self.assertTrue(calls(fn, "live_status") and calls(fn, "check"), fn.name)
+
+    def test_writes_only_behind_write_flag(self):
+        """Запись из CLI — только через `_write`, а его вызов лежит внутри `if a.write:` (в теле, не в else)."""
+        tree = ast.parse((PKG / "cli.py").read_text())
+        owner, parent = functions_of(tree), parents_of(tree)
+        for n in refs(tree, "apply"):
+            self.assertEqual(owner[n], "_write", f"write.apply вне _write: строка {n.lineno}")
+        sites = calls(tree, "_write")
+        self.assertGreaterEqual(len(sites), 3)
+        for c in sites:
+            node, ok = c, False
+            while node in parent and not isinstance(node, ast.FunctionDef):
+                up = parent[node]
+                if isinstance(up, ast.If) and node in up.body and ast.unparse(up.test) == "a.write":
+                    ok = True
+                node = up
+            self.assertTrue(ok, f"_write не под `if a.write:` в {owner[c]}:{c.lineno}")
+        for n in refs(tree, "_write"):  # только прямой вызов: не передавать `_write` дальше как значение
+            self.assertTrue(isinstance(parent[n], ast.Call) and parent[n].func is n, f"_write как значение: {n.lineno}")
+
+    def test_write_session_asks_obs_fresh(self):
+        """`_write` отдаёт apply функцию, которая каждый раз спрашивает OBS (`live_status()`), а не готовый ответ."""
+        tree = ast.parse((PKG / "cli.py").read_text())
+        fn = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == "_write")
+        (site,) = calls(fn, "apply")
+        live = next(k.value for k in site.keywords if k.arg == "live")
+        self.assertIsInstance(live, ast.Lambda)
+        self.assertEqual(ast.unparse(live.body), "live_status()[0]")
+        imported = {a.name for n in ast.walk(fn) if isinstance(n, ast.ImportFrom) and n.module == "obs"
+                    for a in n.names}
+        self.assertIn("live_status", imported)
 
 
 class Obs(unittest.TestCase):
