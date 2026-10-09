@@ -1,15 +1,22 @@
 import QtQuick
 
-// Drop-down list of sound profiles, hanging under the header's profile chip. The list is
-// `sc3.profiles` ([{name, note}]); the app has none yet (they come with writing to the SC3).
+// Drop-down menu of sound profiles, hanging under the header's profile chip. The rows are
+// `sc3.profiles` ([{name, note, action?, enabled?, active?}]). In the app each row is an
+// action - «Подкаст — применить», «Вернуть как было», «Как с завода» (later) - behind the
+// write fuse: a click asks `sc3.profileAction(action)`, a disabled row is dim and
+// `sc3.profileHint` says why. Mock-up rows without `action` are plain profiles plus
+// «Новый профиль…» (design/panel/scenes/DemoState.qml).
 Item {
     id: menu
+    signal picked()                    // a row was clicked: the window closes the menu
     required property Tokens theme
     required property QtObject sc3     // Backend (app) or DemoState (mock-ups): same shape
     property int forcedHover: -1       // mock-ups: row drawn as hovered
     property int mouseHover: -1
     readonly property int hovered: forcedHover >= 0 ? forcedHover : mouseHover
     readonly property var profiles: sc3.profiles || []
+    readonly property bool mock: profiles.length > 0 && profiles[0].action === undefined
+    readonly property string hint: sc3.profileHint || ""
     readonly property real ts: theme.uiTextSize
 
     implicitWidth: 300
@@ -68,16 +75,29 @@ Item {
                     id: item
                     required property var modelData
                     required property int index
-                    readonly property bool active: modelData.name === menu.sc3.profile
+                    readonly property bool active: modelData.active !== undefined ? modelData.active
+                                                                                  : modelData.name === menu.sc3.profile
+                    readonly property bool allowed: modelData.enabled !== false
+                    objectName: "profileRow-" + (modelData.action || index)   // tests click it by name
                     width: list.width
                     height: 50
                     radius: menu.theme.uiRadius
-                    color: index === menu.hovered ? menu.theme.menuHover : "transparent"
+                    opacity: allowed ? 1 : 0.45
+                    color: allowed && index === menu.hovered ? menu.theme.menuHover : "transparent"
                     MouseArea {
                         anchors.fill: parent
                         hoverEnabled: true
+                        cursorShape: item.allowed && item.modelData.action ? Qt.PointingHandCursor : Qt.ArrowCursor
                         onContainsMouseChanged: menu.mouseHover = containsMouse ? item.index
                                                 : menu.mouseHover === item.index ? -1 : menu.mouseHover
+                        onClicked: {
+                            if (!item.modelData.action || !item.allowed)
+                                return;
+                            // Close first: the action republishes `profiles`, and the Repeater rebuilds this row.
+                            const action = item.modelData.action;
+                            menu.picked();
+                            menu.sc3.profileAction(action);
+                        }
                     }
                     Glyph {
                         visible: item.active
@@ -109,14 +129,39 @@ Item {
                 }
             }
             Rectangle {   // separator
-                visible: menu.profiles.length > 0
+                visible: menu.mock || menu.hint !== ""
                 width: list.width
                 height: 13
                 color: "transparent"
                 Rectangle { y: 6; x: 8; width: parent.width - 16; height: 1; color: menu.theme.menuBorder }
             }
+            // Why the rows are disabled (the write fuse, on air, not connected).
             Item {
-                visible: menu.profiles.length > 0
+                visible: !menu.mock && menu.hint !== ""
+                width: list.width
+                height: 34
+                Glyph {
+                    x: 10
+                    anchors.verticalCenter: parent.verticalCenter
+                    size: 15
+                    stroke: 2.2
+                    color: menu.theme.menuDim
+                    strokePath: Icons.lockStroke
+                    fillPath: Icons.lockFill
+                }
+                Text {
+                    x: 36
+                    width: parent.width - 44
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: menu.hint
+                    elide: Text.ElideRight
+                    color: menu.theme.menuDim
+                    font.family: menu.theme.fontUi
+                    font.pixelSize: menu.ts - 1
+                }
+            }
+            Item {
+                visible: menu.mock
                 width: list.width
                 height: 38
                 Glyph {

@@ -9,7 +9,8 @@ from opensc3.model import AppState, AudioState, Channel, Link, Live, Sc3State
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 DEMO = ROOT / "design" / "panel" / "scenes" / "DemoState.qml"
 # их считает бэкенд, а не qml_state: опрос, уровни, предохранитель записи и ждущая запись ручки MIC
-BACKEND_ONLY = {"busy", "polling", "levelIn", "levelOut", "writeEnabled", "trimMicPending"}
+BACKEND_ONLY = {"busy", "polling", "levelIn", "levelOut", "writeEnabled", "trimMicPending",
+                "profileHint", "writeTitle", "writeDone", "writeTotal"}   # + меню профиля и прогресс записи
 
 
 def demo_names() -> set[str]:

@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import time
 
-from opensc3.model import VOICES, AppState, Link, Live
+from opensc3 import reader as R
+from opensc3 import write as W
+from opensc3.layouts import EQ_TYPES, q12_db
+from opensc3.model import VOICES, AppState, Link, Live, Sc3State
 
 METER_FLOOR_DB = -54.0   # низ полосы из 9 светодиодов: 6 дБ на светодиод, верхний — 0 dBFS
 METER_FALL_PER_S = 1.6   # спад показаний: вся полоса за ~0,6 с (подъём — мгновенный)
@@ -87,7 +90,7 @@ def qml_state(st: AppState, now: float) -> dict:
         "unknown": unknown,
         "guess": {k: True for k, ch in (("muteMic", s.mic), ("muteLineIn", s.line_in))
                   if ch.muted is True and ch.muted_guess},   # клавиша горит по догадке опроса — «≈»
-        "dsp": {},                                            # EQ, гейт, голоса… ядро пока не читает
+        "dsp": drawer_dsp(s),                                 # ящик MIC: EQ, шумодав, поправка (голоса — позже)
         "lastPoll": clock_text(s.read_at),
         "acpNote": st.acp_note,
         "audioPresent": st.audio.present,
@@ -100,6 +103,76 @@ def qml_state(st: AppState, now: float) -> dict:
         "profiles": [],                                       # профили — этап 3–4
     }
     return props
+
+
+# --- ящик MIC: узлы обработки голоса (форма — design/panel/scenes/demo-dsp.js) ------------------------------
+
+EQ_KIND = {"peak": "pk", "lowshelf": "ls", "highshelf": "hs", "lowpass": "lp", "highpass": "hp", "bandpass": "bp",
+           "notch": "notch"}
+EQ_NAME = {"peak": "пик", "lowshelf": "полка НЧ", "highshelf": "полка ВЧ", "lowpass": "ФНЧ", "highpass": "ФВЧ",
+           "bandpass": "полоса", "notch": "режекция"}
+GATE_SCALE = 80.0   # шкала порога шумодава: −80…0 дБ
+TRIM_LO, TRIM_HI = W.TRIM_DB
+
+
+def _frac(x: float) -> float:
+    return min(1.0, max(0.0, x))
+
+
+def _hz(f: int) -> str:
+    """80 Гц, 4 кГц, 1,5 кГц."""
+    if f < 1000:
+        return f"{f} Гц"
+    k = f / 1000
+    return (f"{k:.0f}" if k == int(k) else f"{k:.1f}".replace(".", ",")) + " кГц"
+
+
+def eq_data(values) -> dict:
+    """Узел EQ голоса `0xA2` → карточка: 10 слотов (тип, частота, Q, усиление, вкл.) и `bands` — включённые фильтры
+    для кривой (весь EQ выключен — кривая ровная). Пустой слот — частота или Q равны 0."""
+    on, slots, bands = bool(values[0]), [], []
+    for k in range(10):
+        en, t, f0, q, g = values[3 + 5 * k: 8 + 5 * k]
+        kind = EQ_TYPES[t] if 0 <= t < len(EQ_TYPES) else None
+        empty = f0 <= 0 or q <= 0 or kind is None
+        slot = {"n": k + 1, "on": bool(en) and not empty, "empty": empty, "kind": EQ_KIND.get(kind, ""),
+                "name": EQ_NAME.get(kind, "?"), "f": f0, "q": q / 1024, "g": g / 256,
+                "freq": _hz(f0), "qText": W.human("q", q), "gain": W.human("eqgain", g),
+                "shaped": kind in ("peak", "lowshelf", "highshelf")}   # у этих типов усиление что-то значит
+        slots.append(slot)
+        if slot["on"]:
+            bands.append({"n": k + 1, "kind": slot["kind"], "f": f0, "q": q / 1024, "g": g / 256, "name": slot["name"]})
+    return {"on": on, "bands": bands if on else [], "slots": slots}
+
+
+def gate_data(values) -> dict:
+    """Шумодав `0x82` (экспандер): [вкл., порог 0,01 дБ, степень, атака мс, спад мс] → карточка «Гейт»."""
+    on, thr, ratio, attack, release = values[:5]
+    return {"on": bool(on), "threshold": _frac((thr / 100 + GATE_SCALE) / GATE_SCALE),
+            "rows": [{"label": "Порог", "value": W.human("cdb", thr), "fraction": _frac((thr / 100 + 80) / 80)},
+                     {"label": "Степень", "value": f"1:{ratio}", "fraction": _frac((ratio - 1) / 9)},
+                     {"label": "Атака", "value": W.human("ms", attack), "fraction": _frac(attack / 100)},
+                     {"label": "Спад", "value": W.human("ms", release), "fraction": _frac(release / 2000)}]}
+
+
+def trim_data(values) -> dict:
+    """Поправка MIC `0xAC` → карточка: значение и где оно на шкале −20…+10 дБ (0 дБ — `centre`)."""
+    raw = values[2]
+    span = TRIM_HI - TRIM_LO
+    db = q12_db(raw) if raw > 0 else TRIM_LO
+    return {"value": W.human("gain", raw), "fraction": _frac((db - TRIM_LO) / span), "centre": -TRIM_LO / span,
+            "ticks": [{"text": "−20", "fraction": 0.0}, {"text": "0", "fraction": -TRIM_LO / span},
+                      {"text": "+10", "fraction": 1.0}]}
+
+
+def drawer_dsp(s: Sc3State) -> dict:
+    """Что ящик MIC знает из прочитанных узлов: `eq`, `gate`, `gain` (поправка). Не прочитано — ключа нет, карточка
+    пишет «появится позже». Компрессора на пути в ПК нет (DRC микрофона по SDK — только в мониторе)."""
+    out, n = {}, s.nodes
+    for key, ctrl, build in (("eq", R.VOICE_EQ, eq_data), ("gate", R.GATE, gate_data), ("gain", R.MIC_TRIM, trim_data)):
+        if ctrl in n and len(n[ctrl]) >= R.NEED[ctrl]:
+            out[key] = build(n[ctrl])
+    return out
 
 
 def levels(st: AppState) -> tuple[float, float]:

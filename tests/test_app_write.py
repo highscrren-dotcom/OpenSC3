@@ -55,7 +55,8 @@ class WriteCase(unittest.TestCase):
         self.journal = self.dir / "writes.jsonl"
 
     def visible(self, scenario="write", *, live_interval=0.2):
-        """Окно показано, идёт опрос, поправка MIC прочитана."""
+        """Окно показано, идёт опрос, узлы обработки голоса прочитаны — окно готово писать (запись ждёт этих чтений:
+        poll.Plan.ready_to_write)."""
         from opensc3.app.backend import Backend
         from opensc3.app.fake import FakeCore
         core = FakeCore(scenario)
@@ -64,7 +65,8 @@ class WriteCase(unittest.TestCase):
         self.addCleanup(b.stop)
         b.set_window_visible(True)
         b.start()
-        self.assertTrue(wait_until(lambda: b.property("polling") and not b.property("unknown").get("trimMic")))
+        self.assertTrue(wait_until(lambda: b.property("polling") and not b.property("unknown").get("trimMic")
+                                   and all(n in b.state.sc3.nodes for n in R.DSP_NODES)))
         return core, b
 
     def after_poll_read(self, core) -> None:
@@ -252,7 +254,8 @@ class Knob(unittest.TestCase):
         window.setHeight(round(window.property("fullHeight")))
         window.show()
         backend.start()
-        self.assertTrue(wait_until(lambda: backend.property("polling") and not backend.property("unknown").get("trimMic")))
+        self.assertTrue(wait_until(lambda: backend.property("polling") and not backend.property("unknown").get("trimMic")
+                                   and all(n in backend.state.sc3.nodes for n in R.DSP_NODES)))
         return core, backend, window
 
     @staticmethod

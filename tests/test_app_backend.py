@@ -107,9 +107,9 @@ class Poll(BackendCase):
         for _ in range(3):                       # «Обновить» в первые секунды — поглощается полным набором
             b.refresh()
             spin(0.45)
-        self.assertTrue(wait_until(lambda: len(core.poll_reads) >= 8, timeout=8))
+        start = poll.Plan(dsp=True).queue                       # голос, нота, узлы обработки голоса, остаток набора
+        self.assertTrue(wait_until(lambda: len(core.poll_reads) >= len(start) + 1, timeout=10))
         ctrls = [r[0] for r in core.poll_reads]
-        start = poll.Plan(trim=True).queue                      # поправка MIC, затем полный набор
         self.assertEqual(ctrls[:len(start) + 1], [*start, R.ADC1])  # по одному чтению на слот
         times = [r[1] for r in core.poll_reads]
         gaps = [b_ - a for a, b_ in itertools.pairwise(times)]
@@ -127,8 +127,10 @@ class Poll(BackendCase):
     def test_cycle_order(self):
         core, _ = self.visible(full_set_first=False)
         self.assertTrue(wait_until(lambda: len(core.poll_reads) >= 5, timeout=6))
-        # и без полного набора поправка MIC — первой (её мог поменять CLI, пока окно было скрыто), потом круг
-        self.assertEqual([r[0] for r in core.poll_reads[:5]], [R.MIC_TRIM, *R.POLL_CYCLE[:4]])
+        # и без полного набора голос, нота и узлы обработки голоса — первыми (их мог поменять CLI или кнопка)
+        self.assertEqual([r[0] for r in core.poll_reads[:5]], [R.PITCH, R.AUTOTUNE, *R.DSP_NODES])
+        self.assertTrue(wait_until(lambda: len(core.poll_reads) >= 8, timeout=4))
+        self.assertEqual([r[0] for r in core.poll_reads[5:8]], list(R.POLL_CYCLE[:3]))
 
     def test_hidden_window_closes_sc3(self):
         core, b = self.visible(full_set_first=False)

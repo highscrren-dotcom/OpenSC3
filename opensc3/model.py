@@ -55,6 +55,9 @@ class Sc3State:
     mic_monitor: bool | None = None
     voice: str | None = None         # один из VOICES; "" — выключено; None — неизвестно
     electric_key: str | None = None  # один из KEYS; "" — выключено; None — неизвестно
+    # Узлы обработки голоса целиком, как прочитаны: поправка 0xAC, EQ голоса 0xA2, шумодав 0x82 (reader.DSP_NODES) —
+    # для ящика MIC и сверки с профилем. Нет ключа — узел не прочитан. Не менять на месте: только replace().
+    nodes: dict[int, tuple[int, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)

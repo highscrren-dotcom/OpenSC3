@@ -17,6 +17,11 @@ BLOCKS = {
 }
 
 
+# Узлы, которые читаются целиком (reader.DSP_NODES), — по умолчанию своей длины (синтетика): EQ голоса 0xA2 —
+# включён, все 10 слотов пусты; шумодав 0x82 — выключен. Остальные узлы — [1, 0, 4096].
+DEFAULT_NODES = {0xA2: (1, 0, 0) + (0,) * 50, 0x82: (0, -4500, 2, 3, 80)}
+
+
 class FakeTransport:
     """`nodes` — значения узлов {адрес: [enable, p1, …]} (остальные узлы — [1, 0, 4096]); `blocks` — тела блоков
     поверх BLOCKS; `silent` — команды, на которые устройство молчит (GET_REPORT отдаст прошлый ответ);
@@ -89,7 +94,8 @@ class FakeTransport:
                 self._reply(ctrl, bytes([i]) + f"1:Fake {i}".encode())
             # иначе молчит — GET_REPORT вернёт прошлый ответ
         elif P.NODE_MIN <= ctrl <= P.NODE_MAX:
-            self._reply(ctrl, b"\xff" + struct.pack("<hhh", 1, 0, 4096))
+            v = DEFAULT_NODES.get(ctrl, (1, 0, 4096))
+            self._reply(ctrl, b"\xff" + struct.pack(f"<{len(v)}h", *v))
         elif ctrl in BLOCKS:
             self._reply(ctrl, bytes.fromhex(BLOCKS[ctrl].replace(" ", "")))
         elif ctrl in P.SYSTEM:

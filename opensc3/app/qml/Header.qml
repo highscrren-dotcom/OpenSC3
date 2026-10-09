@@ -15,6 +15,11 @@ Rectangle {
     signal settingsClicked()
     readonly property Item profileChip: chip          // the profile menu hangs under it
     readonly property real ts: theme.uiTextSize
+    // A profile (or «Вернуть как было») is being written: «Подкаст: 12 из 24», a bar and «Стоп».
+    readonly property bool writing: (sc3.writeTitle || "") !== ""
+    readonly property string progressText: !writing ? ""
+        : sc3.writeTotal > 0 ? sc3.writeTitle + ": " + sc3.writeDone + " из " + sc3.writeTotal
+        : sc3.writeDone > 0 ? sc3.writeTitle + ": " + sc3.writeDone : sc3.writeTitle + " — ждёт слота"
 
     readonly property var linkWords: ({
         "connected": "подключён", "disconnected": "отключён", "no_access": "нет доступа",
@@ -131,6 +136,7 @@ Rectangle {
                 sc3: header.sc3
                 forcedHover: header.profileHover
                 y: chip.height + 6
+                onPicked: header.profileClicked()
             }
             Row {
                 id: chipRow
@@ -138,9 +144,13 @@ Rectangle {
                 height: parent.height
                 spacing: 7
                 Ui {
-                    text: header.sc3.profile !== "" ? header.sc3.profile : "нет"
-                    color: header.sc3.profile !== "" ? header.theme.headerText : header.theme.headerDim
-                    font.bold: header.sc3.profile !== ""
+                    objectName: "profileLabel"
+                    text: header.writing ? header.progressText
+                        : header.sc3.profile !== "" ? header.sc3.profile : header.sc3.connected ? "…" : "нет"
+                    color: header.writing ? header.theme.accent
+                         : header.sc3.profile !== "" ? header.theme.headerText : header.theme.headerDim
+                    font.bold: header.writing || header.sc3.profile !== ""
+                    font.features: { "tnum": 1 }
                 }
                 Glyph {
                     anchors.verticalCenter: parent.verticalCenter
@@ -154,6 +164,45 @@ Rectangle {
                 anchors.fill: parent
                 cursorShape: Qt.PointingHandCursor
                 onClicked: header.profileClicked()
+            }
+            // Progress along the chip's bottom edge.
+            Rectangle {
+                visible: header.writing && header.sc3.writeTotal > 0
+                x: 1
+                y: chip.height - 3
+                width: (chip.width - 2) * Math.min(1, header.sc3.writeDone / Math.max(1, header.sc3.writeTotal))
+                height: 2
+                color: header.theme.accent
+                Behavior on width {
+                    enabled: header.theme.animations
+                    NumberAnimation { duration: 300 }
+                }
+            }
+        }
+        // «Стоп»: stop and roll back what this session wrote.
+        Rectangle {
+            id: stopButton
+            objectName: "stopWrite"          // tests click it by name
+            visible: header.writing
+            anchors.verticalCenter: parent.verticalCenter
+            width: stopText.implicitWidth + 24
+            height: header.height - 16
+            radius: header.theme.uiRadius
+            color: stopArea.containsMouse ? Qt.alpha(header.theme.warn, 0.22) : Qt.alpha(header.theme.warn, 0.12)
+            border.width: 1
+            border.color: Qt.alpha(header.theme.warn, 0.7)
+            Ui {
+                id: stopText
+                anchors.centerIn: parent
+                text: "Стоп"
+                font.bold: true
+            }
+            MouseArea {
+                id: stopArea
+                anchors.fill: parent
+                hoverEnabled: true
+                cursorShape: Qt.PointingHandCursor
+                onClicked: header.sc3.stopWrite()
             }
         }
     }

@@ -2,7 +2,8 @@ import QtQuick
 
 // Drawer of one panel section (brief #4), sliding out from under the trim strip:
 // its top `tuck` px stay hidden under the strip. Title row, then the content
-// (default property) in a row of cards. Writing to the SC3 is not in v1 yet.
+// (default property) in a row of cards. Drawers only show what is read from the SC3;
+// writing goes through the trim knob and the profile menu.
 Item {
     id: drawer
     required property Tokens theme
@@ -11,6 +12,7 @@ Item {
     property real notchX: 0            // centre of the owning section, drawer coordinates
     property real notchW: 140
     property real bodyHeight: 246
+    property string note: "Только просмотр"
     default property alias content: body.data
     signal collapse()
     readonly property real tuck: 22
@@ -85,7 +87,7 @@ Item {
         y: drawer.tuck + 15
         spacing: 18
         Text {
-            text: "Только просмотр: запись в SC3 пока выключена"
+            text: drawer.note
             color: drawer.theme.drawerDim
             font.family: drawer.theme.fontUi
             font.pixelSize: drawer.ts - 0.5

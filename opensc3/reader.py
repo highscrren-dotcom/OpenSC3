@@ -1,4 +1,4 @@
-"""Один набор чтений ACP → `Sc3State`. Минимум кадров: 0x00 (в verify), 0x02, 0x07, 0xB6, 0x85, 0x86, 0xAC — семь.
+"""Один набор чтений ACP → `Sc3State`. Кадры: 0x00 (в verify), 0x02, 0x07, 0xB6, 0x85, 0x86, 0xAC, 0xA2, 0x82 — девять.
 
 Вызывающий уже открыл устройство и спросил `AcpGuard` (эфир не идёт, интервал выдержан). Здесь только чтение
 через `Sc3`; чего по ACP не узнать — `None` (model.py). Карта кнопок проверена 08.10 с владельцем по дампам
@@ -11,7 +11,10 @@
 - CHANGE VOICE — пресет: `0x85` (сдвиг высоты) включён, голос узнаётся по величине сдвига;
 - ELECTRIC — `0x86` (автотюн): буква SDK по кругу → точка панели в той же позиции по строкам (`ELECTRIC_KEYS`);
 - поправка MIC в ПК — усиление узла `0xAC` (Q12, 4096 = 0 дБ; write.MIC_TRIM): её меняют только окно и CLI, поэтому
-  она читается в наборе и после записи, а в круг опроса не входит.
+  она читается в наборе и после записи, а в круг опроса не входит;
+- узлы обработки голоса на пути в ПК (`DSP_NODES`: поправка `0xAC`, EQ голоса `0xA2`, шумодав `0x82`) читаются
+  целиком в `Sc3State.nodes` — для ящика MIC и сверки с профилем. Кнопка голоса или ELECTRIC переписывает их пресетом
+  (docs/GOTCHAS.md): опрос окна тогда перечитывает их, а в круг они не входят.
 MIC MONITOR, MUTE LINE OUT, ползунки Headphone и Line Out, RGB, пэды в ACP не видны — `None`/`locked`.
 """
 from __future__ import annotations
@@ -29,13 +32,16 @@ LINE_IN = 0xB6       # на деле ползунок Line In (проверен�
 PITCH = 0x85         # сдвиг высоты: по нему узнаётся голос CHANGE VOICE
 AUTOTUNE = 0x86      # ELECTRIC
 MIC_TRIM = 0xAC      # поправка MIC в ПК (write.MIC_TRIM; живая проба 09.10: доходит до ПК ровно на заданные дБ)
+VOICE_EQ = 0xA2      # EQ голоса до ответвления в ПК (write.VOICE_EQ): [вкл., предусиление, число, 10 × 5]
+GATE = 0x82          # шумодав микрофона, экспандер (write.GATE): [вкл., порог 0,01 дБ, степень, атака, спад]
+DSP_NODES = (MIC_TRIM, VOICE_EQ, GATE)  # читаются целиком (Sc3State.nodes); их переписывает пресет кнопки
 STEP, STEPS = 132, 31  # у ползунков 32 положения 0…31, шаг 132 (4092 — верх)
 # Лёгкий опрос окна (решение 9): одно чтение раз в 0,5 с по кругу (нагрузка как на стенде этапа 2). Кнопки SC3 не
 # шлют HID — голос и ELECTRIC окно узнаёт только чтением, поэтому они в круге: Mic — раз в 1 с, голос, ELECTRIC
 # и Line In — раз в 3 с. Полный набор `read_state` — отдельно, не чаще раза в 5 с.
 POLL_CYCLE = (ADC1, PITCH, ADC1, AUTOTUNE, ADC1, LINE_IN)
-FULL_SET = (QUERY, ADC1, LINE_IN, PITCH, AUTOTUNE, MIC_TRIM)  # то, что read_state читает после verify()
-NEED = {LINE_IN: 3, PITCH: 2, AUTOTUNE: 2, MIC_TRIM: 3}  # минимум значений узла
+FULL_SET = (QUERY, ADC1, LINE_IN, PITCH, AUTOTUNE, *DSP_NODES)  # то, что read_state читает после verify()
+NEED = {LINE_IN: 3, PITCH: 2, AUTOTUNE: 2, MIC_TRIM: 3, VOICE_EQ: 53, GATE: 5}  # минимум значений узла
 
 # Голос CHANGE VOICE → сдвиг высоты `0x85` values[1] (дампы 08.10). Выключен — values[0] = 0, а высота остаётся
 # от последнего голоса. Прочие узлы пресета для узнавания не нужны.
@@ -124,7 +130,7 @@ def _foreign(sc3: Sc3) -> bool:
 
 
 def read_state(sc3: Sc3, now: float) -> Sc3State:
-    """verify() и шесть чтений. Чужая сборка → FOREIGN; сбой транспорта или хоть одно непрочитанное → ERROR
+    """verify() и восемь чтений. Чужая сборка → FOREIGN; сбой транспорта или хоть одно непрочитанное → ERROR
     (без значений: половине набора верить нельзя). `now` — time.time() вызывающего, станет `read_at`."""
     bad = verify_link(sc3)
     if bad is not None:
@@ -139,12 +145,13 @@ def read_state(sc3: Sc3, now: float) -> Sc3State:
                 return error
     except P.ProtocolError:
         return error
-    q, adc1, line_in, pitch, tune, trim = got
+    q, adc1, line_in, pitch, tune, *dsp = got
     if any(len(v) < NEED[c] for c, v in zip(FULL_SET[2:], got[2:], strict=True)):
         return error
     try:
         load = dsp_load(q)
-        mic = replace(mic_channel(adc1), trim_db=mic_trim(trim))
+        nodes = {c: tuple(v) for c, v in zip(DSP_NODES, dsp, strict=True)}
+        mic = replace(mic_channel(adc1), trim_db=mic_trim(nodes[MIC_TRIM]))
     except (KeyError, struct.error):  # тело короче раскладки
         return error
     return Sc3State(
@@ -156,4 +163,5 @@ def read_state(sc3: Sc3, now: float) -> Sc3State:
         line_in=line_in_channel(line_in),
         voice=voice(pitch),
         electric_key=electric_key(tune),
+        nodes=nodes,
     )

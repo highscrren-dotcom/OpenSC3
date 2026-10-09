@@ -107,8 +107,13 @@ class Parse(unittest.TestCase):
 
     def test_trim_first_and_not_in_cycle_or_refresh(self):
         """Поправку MIC читаем первой в каждой сессии окна (и без полного набора), но ни в круге, ни в «Обновить»."""
-        self.assertEqual(poll.Plan(trim=True).queue, [R.MIC_TRIM, *(c for c in R.FULL_SET if c != R.MIC_TRIM)])
-        self.assertEqual(poll.Plan(full_set_first=False, trim=True).queue, [R.MIC_TRIM])
+        dsp = list(R.DSP_NODES)
+        self.assertEqual(dsp, [R.MIC_TRIM, R.VOICE_EQ, R.GATE])
+        first = [R.PITCH, R.AUTOTUNE, *dsp]               # голос и нота — до узлов, которые переписывает их пресет
+        self.assertEqual(poll.Plan(dsp=True).queue, [*first, *(c for c in R.FULL_SET if c not in first)])
+        self.assertEqual(poll.Plan(full_set_first=False, dsp=True).queue, first)
+        for c in dsp:
+            self.assertNotIn(c, R.POLL_CYCLE)
         self.assertNotIn(R.MIC_TRIM, R.POLL_CYCLE)
         self.assertNotIn(R.MIC_TRIM, poll.REFRESH)
         self.assertEqual(poll.trim_step(2.26, -20, 10), 2.5)
@@ -118,10 +123,12 @@ class Parse(unittest.TestCase):
     def test_voice_from_pitch_alone(self):
         plan = poll.Plan()
         self.assertEqual(plan.parse(PITCH, self.session.read(PITCH)), {"voice": ""})
-        self.assertEqual(plan.parse(PITCH, b"\xff" + struct.pack("<hh", 1, -120)), {"voice": "monster"})
-        self.assertEqual(plan.parse(PITCH, b"\xff" + struct.pack("<hh", 1, 7)), {"voice": None})
+        # смена голоса — это кнопка: пресет переписал узлы (preset_changed, перечитать DSP_NODES)
+        self.assertEqual(plan.parse(PITCH, b"\xff" + struct.pack("<hh", 1, -120)),
+                         {"voice": "monster", "preset_changed": True})
+        self.assertEqual(plan.parse(PITCH, b"\xff" + struct.pack("<hh", 1, 7))["voice"], None)
         self.assertEqual(plan.parse(TUNE, b"\xff" + struct.pack("<hhhh", 1, ord("a"), ord("n"), 1)),
-                         {"electric_key": "A"})
+                         {"electric_key": "A"})                       # первое чтение ноты — не смена
 
     def test_short_reply_is_a_failure(self):
         plan = poll.Plan()

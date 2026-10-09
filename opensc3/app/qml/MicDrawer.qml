@@ -1,17 +1,20 @@
 import QtQuick
 
-// MIC drawer: what the body has no controls for - voice EQ, gate, compressor,
-// digital gain. Everything comes from sc3.dsp (shape: design/panel/scenes/demo-dsp.js);
-// a card whose key is missing shows «появится позже» (Card.ready).
+// MIC drawer: what the body has no controls for - voice EQ (node 0xA2, ten slots), gate
+// (0x82), compressor, the trim to the PC (0xAC). Everything comes from sc3.dsp (shape:
+// design/panel/scenes/demo-dsp.js; the app builds it from the nodes it read, view.drawer_dsp);
+// a card whose key is missing shows «появится позже» (Card.ready). Display only.
 Drawer {
     id: drawer
     required property QtObject sc3     // Backend (app) or DemoState (mock-ups): same shape
     title: "MIC"
     subtitle: "Обработка голоса"
+    note: "Только просмотр · «Подкаст» — в меню профиля"
+    bodyHeight: 300
 
     readonly property var dsp: sc3.dsp || ({})
-    readonly property var eqData: dsp.eq && dsp.eq.bands && dsp.eq.bands.length > 0 ? dsp.eq : null
-    readonly property var gateData: dsp.gate && dsp.gate.level ? dsp.gate : null
+    readonly property var eqData: dsp.eq && dsp.eq.slots ? dsp.eq : null
+    readonly property var gateData: dsp.gate && dsp.gate.rows ? dsp.gate : null
     readonly property var compData: dsp.comp && dsp.comp.reduction ? dsp.comp : null
     readonly property var gainData: dsp.gain && dsp.gain.value !== undefined ? dsp.gain : null
 
@@ -34,7 +37,7 @@ Drawer {
         Card {
             id: eqCard
             theme: drawer.theme
-            width: cards.inner * 0.43
+            width: cards.inner * 0.47
             height: cards.height
             title: "Эквалайзер голоса"
             ready: drawer.eqData !== null
@@ -48,41 +51,53 @@ Drawer {
                     bands: drawer.eqData.bands
                     selected: drawer.eqData.selected ?? -1
                     width: parent.width
-                    height: 142
+                    height: 136
                 }
-                Row {
-                    y: 152
+                // Ten slots of the node, as they are: on, type, frequency, gain, Q. Off and empty ones are dim.
+                Grid {
+                    id: slotGrid
+                    y: 146
                     width: parent.width
-                    spacing: 6
+                    columns: 5
+                    columnSpacing: 6
+                    rowSpacing: 6
+                    readonly property real cw: (width - 4 * columnSpacing) / 5
                     Repeater {
-                        model: eq.bands.length
+                        model: drawer.eqData.slots
                         delegate: Rectangle {
                             id: chip
-                            required property int index
-                            readonly property var band: eq.bands[index]
-                            readonly property bool sel: index === eq.selected
-                            width: (eqCard.width - 28 - (eq.bands.length - 1) * 6) / eq.bands.length
-                            height: 38
+                            required property var modelData
+                            readonly property var slot: modelData
+                            width: slotGrid.cw
+                            height: 48
                             radius: drawer.theme.uiRadius === 0 ? 0 : 5
-                            color: sel ? Qt.alpha(drawer.theme.accent, 0.12) : "transparent"
+                            color: slot.on ? Qt.alpha(drawer.theme.accent, 0.08) : "transparent"
                             border.width: 1
-                            border.color: sel ? drawer.theme.accent : drawer.theme.drawerCardEdge
+                            border.color: slot.on ? Qt.alpha(drawer.theme.accent, 0.55) : drawer.theme.drawerCardEdge
+                            opacity: slot.on ? 1 : slot.empty ? 0.4 : 0.6
                             Column {
-                                x: 8
+                                x: 7
                                 anchors.verticalCenter: parent.verticalCenter
-                                spacing: 1
+                                spacing: 0
                                 Text {
-                                    text: (chip.index + 1) + "  " + drawer.fmtHz(chip.band.f)
-                                    color: chip.sel ? drawer.theme.accent : drawer.theme.drawerText
+                                    text: chip.slot.n + "  " + (chip.slot.empty ? "—" : chip.slot.freq)
+                                    color: chip.slot.on ? drawer.theme.accent : drawer.theme.drawerText
                                     font.family: drawer.theme.fontValue
                                     font.pixelSize: drawer.ts - 1.5
                                     font.bold: true
                                 }
                                 Text {
-                                    text: chip.band.kind === "hp" ? chip.band.name : chip.band.name + " " + drawer.dB(chip.band.g).replace(" дБ", "")
+                                    text: chip.slot.empty ? "пусто" : chip.slot.name + (chip.slot.on ? "" : " · выкл")
                                     color: drawer.theme.drawerDim
                                     font.family: drawer.theme.fontUi
                                     font.pixelSize: drawer.ts - 2
+                                }
+                                Text {
+                                    visible: !chip.slot.empty
+                                    text: (chip.slot.shaped ? chip.slot.gain.replace(" дБ", "") + " · " : "") + chip.slot.qText
+                                    color: drawer.theme.drawerFaint
+                                    font.family: drawer.theme.fontValue
+                                    font.pixelSize: drawer.ts - 2.5
                                 }
                             }
                         }
@@ -95,7 +110,7 @@ Drawer {
         Card {
             id: gateCard
             theme: drawer.theme
-            width: cards.inner * 0.17
+            width: cards.inner * 0.19
             height: cards.height
             title: "Гейт"
             ready: drawer.gateData !== null
@@ -107,15 +122,16 @@ Drawer {
                 Item {
                     width: parent.width
                     height: 40
-                    Text {
-                        text: "Вход"
+                    Text {   // input level now (mock-ups), or just the scale with the threshold (app)
+                        text: drawer.gateData.level ? "Вход" : "Порог на шкале −80…0 дБ"
                         color: drawer.theme.drawerDim
                         font.family: drawer.theme.fontUi
-                        font.pixelSize: drawer.ts - 0.5
+                        font.pixelSize: drawer.ts - (drawer.gateData.level ? 0.5 : 1.5)
                     }
                     Text {
+                        visible: !!drawer.gateData.level
                         anchors.right: parent.right
-                        text: drawer.gateData.level.value
+                        text: drawer.gateData.level ? drawer.gateData.level.value : ""
                         color: drawer.theme.drawerText
                         font.family: drawer.theme.fontValue
                         font.pixelSize: drawer.ts
@@ -130,8 +146,9 @@ Drawer {
                         color: drawer.theme.barTrack
                     }
                     Rectangle {
+                        visible: !!drawer.gateData.level
                         y: gateTrack.y
-                        width: gateTrack.width * drawer.gateData.level.fraction
+                        width: gateTrack.width * (drawer.gateData.level ? drawer.gateData.level.fraction : 0)
                         height: gateTrack.height
                         radius: gateTrack.radius
                         gradient: Gradient {
@@ -170,10 +187,13 @@ Drawer {
         Card {
             id: compCard
             theme: drawer.theme
-            width: cards.inner * 0.235
+            width: cards.inner * 0.175
             height: cards.height
             title: "Компрессор"
             ready: drawer.compData !== null
+            // Not on the way to the PC: the mic DRC sits in the headphone monitor only (SDK; docs/WRITE.md).
+            pendingText: drawer.sc3.connected ? "нет на пути в ПК" : "появится позже"
+            pendingNote: drawer.sc3.connected ? "по SDK компрессор микрофона стоит только в\u00a0мониторе наушников" : ""
             badge: ready && drawer.compData.on === false ? "выкл" : "вкл"
             badgeOn: badge === "вкл"
 
@@ -252,7 +272,7 @@ Drawer {
             theme: drawer.theme
             width: cards.inner * 0.165
             height: cards.height
-            title: "Цифровое усиление"
+            title: "Поправка в ПК"
             ready: drawer.gainData !== null
 
             Item {

@@ -45,8 +45,12 @@ QtObject {
     readonly property bool frozen: live !== "off"
     property string onAirTime: "1:23:45"
 
-    // --- sound profiles (none in the app yet)
+    // --- sound profiles: the app's menu rows also carry action / enabled / active (Backend)
     property string profile: "Подкаст"
+    property string profileHint: ""        // why the menu rows are disabled
+    property string writeTitle: ""         // a profile being written: «Подкаст: 12 из 24» and «Стоп»
+    property int writeDone: 0
+    property int writeTotal: 0
     property var profiles: [
         { name: "Подкаст", note: "EQ голоса, гейт и компрессор" },
         { name: "Как с завода", note: "настройки SC3 из коробки" },
@@ -57,4 +61,6 @@ QtObject {
     function toggleMicMute() {}
     function setMicTrim(db) { trimMic = db; }
     function setWriteEnabled(on) { writeEnabled = on; }
+    function profileAction(action) {}
+    function stopWrite() {}
 }

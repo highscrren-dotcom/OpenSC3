@@ -13,6 +13,7 @@ Window {
     property alias animations: content.animations
     property alias forcedTip: content.forcedTip        // --screenshot --tip
     property alias settingsOpen: content.settingsOpen  // --screenshot --tip settings
+    property alias profileOpen: content.profileOpen    // --screenshot --tip profiles
     readonly property real designWidth: content.width
     readonly property real zoom: width / content.width
     readonly property real fullHeight: content.height * zoom

@@ -15,17 +15,23 @@
 - **окно скрыто** — полный набор `read_state` по событию (старт, переподключение), не чаще раза в 5 с.
 Причина, по которой SC3 сейчас не читается, — `AppState.acp_note` (видна в шапке).
 
-Запись (ручка-поправка MIC, `mic.trim`; решения 4 и 9, docs/WRITE.md) — только в идущем опросе, в том же потоке и
-той же сессии SC3: значение ручки ждёт ближайшего слота (новое заменяет старое — пишется последнее), и слот вместо
-чтения отдаётся `write.apply` (`ControlWorker._write_trim` — единственное место окна, где он зовётся). Внутри сеанса
-каждое обращение к SC3 — типы узлов, снимок, кадр, чтение назад — занимает свой слот 0,5 с (`Sc3.pace`), перед
-сеансом и перед кадром OBS спрашивается заново. Журнал — общий с CLI `writes.jsonl` (`sc3 undo` видит запись окна).
+Запись (решения 4 и 9, docs/WRITE.md): ручка-поправка MIC (`mic.trim`), профиль «Подкаст» и «Вернуть как было»
+(как `sc3 undo`) из меню профиля — только в идущем опросе, в том же потоке и той же сессии SC3. Просьба ждёт
+ближайшего слота (значения ручки сливаются — пишется последнее; после смены пресета кнопкой — сперва перечитать
+узлы), и слот вместо чтения отдаётся `write.apply` — из ОДНОГО места окна, `ControlWorker._apply_plan` (сторож:
+tests/test_safety.py). Внутри сеанса каждое обращение к SC3 — типы узлов, снимок, кадр, чтение назад — занимает свой
+слот 0,5 с (`Sc3.pace`), перед сеансом и перед кадром OBS спрашивается заново. «Стоп» — стоп и откат записанного
+в этом сеансе; эфир посреди сеанса — стоп без отката, как в CLI. Журнал — общий с CLI `writes.jsonl`.
 Предохранитель «Разрешить запись в SC3» (меню-шестерёнка) по умолчанию выключен и хранится в настройках окна.
+
+Подпись профиля в шапке — `poll.profile_label`: «Подкаст», «заводской» (пресет панели: как после подключения или
+нажатия кнопки) или «свой» (с тех пор записывали); чей набор был в SC3 при подключении — по журналу записи.
 """
 from __future__ import annotations
 
 import logging
 import math
+import threading
 import time
 from dataclasses import replace
 
@@ -42,6 +48,7 @@ from PySide6.QtCore import (
 )
 
 from opensc3 import reader as R
+from opensc3 import write as W
 from opensc3.model import AppState, AudioState, Link, Live, Sc3State
 from opensc3.write import TRIM_DB
 
@@ -62,6 +69,27 @@ WHY_START, WHY_CONNECT, WHY_SHOW, WHY_USER = "start", "connect", "show", "user"
 
 WRITE_OFF = "Запись в SC3 выключена — включите в настройках"
 TRIM_WHAT = "window mic.trim"   # `what` в журнале записи: так `sc3 undo` называет сеанс окна
+PODCAST, UNDO, FACTORY = "podcast", "undo", "factory"   # действия меню профиля
+JOB_TITLE = {PODCAST: "Подкаст", UNDO: "Возврат"}
+
+
+class WriteStopped(Exception):
+    """«Стоп» из окна посреди сеанса записи: `write.apply` откатывает записанное и отдаёт это исключение дальше."""
+
+
+class ProgressJournal(W.Journal):
+    """Журнал записи (тот же `writes.jsonl`), который ещё и сообщает о каждом кадре: прогресс в шапке и прочитанное
+    назад значение (ящик MIC меняется по ходу записи, а не только после неё)."""
+
+    def __init__(self, path, *, what: str, undoes: str | None, step) -> None:
+        super().__init__(path, what=what, undoes=undoes)
+        self.step = step
+
+    def add(self, op, w, ack, back):
+        e = super().add(op, w, ack, back)
+        self.step(op, sum(1 for x in self.entries if x.get("op") == op),
+                  sum(1 for x in self.entries if x.get("op") == "write"), w.param, back)
+        return e
 
 
 class ControlWorker(QObject):
@@ -75,6 +103,8 @@ class ControlWorker(QObject):
     polled = Signal(object)               # dict: поля Sc3State из очередного чтения опроса (poll.merge)
     pollChanged = Signal(bool, str)       # опрос идёт?, почему нет («» — без замечаний)
     trimDone = Signal(float, object, str)  # просили (дБ), прочитано назад (дБ | None), что не так («» — ничего)
+    jobDone = Signal(str, str, bool)      # профиль/возврат: заголовок, итог для шапки, удалось ли
+    writeProgress = Signal(str, int, int)  # заголовок («Подкаст», «Подкаст — откат»), сделано, всего (0 — неизвестно)
 
     def __init__(self, core: Core, live_interval: float, full_set_first: bool = True,
                  write_enabled: bool = False) -> None:
@@ -101,6 +131,9 @@ class ControlWorker(QObject):
         self._write_enabled = write_enabled
         self._trim_want: float | None = None   # последнее значение ручки, ждёт слота (значения сливаются)
         self._trim_since = -math.inf            # просьбы до этой неудачи — мимо: ручка уже вернулась к прочитанному
+        self._job: str | None = None             # профиль или возврат из меню, ждёт слота
+        self._stop = threading.Event()           # «Стоп» из окна: ставится из потока интерфейса (request_stop)
+        self._stopping = False                   # этот сеанс уже останавливается — откат не прерывать
 
     def _every(self, seconds: float, slot) -> None:
         t = QTimer(self)
@@ -269,10 +302,11 @@ class ControlWorker(QObject):
             return
         if full:
             self._guard.mark()
-        self._session, self._plan = session, poll.Plan(full, trim=True)
+        self._session, self._plan = session, poll.Plan(full, dsp=True)
         self._t0 = self._last = time.monotonic()
         self._k, self._fails = 0, 0
-        self.polled.emit({"link": Link.CONNECTED, "firmware": "V22", "read_at": time.time()})
+        self.polled.emit({"link": Link.CONNECTED, "firmware": "V22", "read_at": time.time(),
+                          "written": self._journal_written()})
         self.pollChanged.emit(True, "")
         self._schedule()
 
@@ -297,8 +331,8 @@ class ControlWorker(QObject):
                 self._at = self._last + poll.POLL_INTERVAL
                 self._arm()
             return
-        if self._trim_want is not None:  # слот — записи: значение ручки ждало его
-            self._write_trim()
+        if (self._job is not None or self._trim_want is not None) and self._plan.ready_to_write():
+            self._run_job()  # слот — записи (узлы прочитаны, пресет кнопки перечитан)
             if self._session is not None:
                 self._schedule()
             return
@@ -334,8 +368,7 @@ class ControlWorker(QObject):
     def _stop_poll(self, note: str) -> None:
         if self._session is None:
             return
-        if self._trim_want is not None:
-            self._drop_trim(note or self._poll_unwanted() or "опрос SC3 остановлен")
+        self._drop_writes(note or self._poll_unwanted() or "опрос SC3 остановлен")
         if self._slot_timer is not None:
             self._slot_timer.stop()
         session, self._session = self._session, None
@@ -346,14 +379,19 @@ class ControlWorker(QObject):
         self._guard.mark()  # SC3 опрашивали: CLI после окна выждет интервал полных наборов
         self.pollChanged.emit(False, note)
 
-    # --- запись: ручка-поправка MIC -------------------------------------------------------------------
+    # --- запись: ручка-поправка MIC, профиль, возврат --------------------------------------------------
 
     @Slot(bool)
     def set_write_enabled(self, enabled: bool) -> None:
-        """Предохранитель записи (меню окна). Выключили — ждущее значение ручки не пишется."""
+        """Предохранитель записи (меню окна). Выключили — ждущие просьбы не пишутся."""
         self._write_enabled = enabled
-        if not enabled and self._trim_want is not None:
-            self._drop_trim("запись в SC3 выключена")
+        if not enabled:
+            self._drop_writes("запись в SC3 выключена")
+
+    def request_stop(self) -> None:
+        """«Стоп» — ЗОВЁТСЯ ИЗ ПОТОКА ИНТЕРФЕЙСА напрямую, не сигналом: сеанс записи держит этот поток, и сигнал дошёл
+        бы только после него. `threading.Event` потокобезопасен; сеанс увидит флаг перед следующим кадром."""
+        self._stop.set()
 
     @Slot(float, float)
     def want_trim(self, db: float, asked_at: float) -> None:
@@ -361,13 +399,24 @@ class ControlWorker(QObject):
         `asked_at` — time.monotonic() просьбы: просьбы, отправленные до неудачи записи, уже не нужны."""
         if asked_at < self._trim_since:
             return
-        if why := self._trim_unwanted():
+        if why := self._write_unwanted():
             self.trimDone.emit(db, None, f"поправка MIC не записана: {why}")
             return
         self._trim_want = db
 
-    def _trim_unwanted(self) -> str:
-        """«» — писать поправку можно (предохранитель включён, SC3 опрашивается, эфира нет); иначе — почему нет."""
+    @Slot(str)
+    def want_job(self, job: str) -> None:
+        """Меню профиля: `podcast` — записать «Подкаст», `undo` — вернуть последний сеанс журнала (как `sc3 undo`)."""
+        title = JOB_TITLE[job]
+        if why := self._write_unwanted():
+            self.jobDone.emit(title, f"{title}: не записано — {why}", False)
+        elif self._job is not None:
+            self.jobDone.emit(title, f"{title}: уже ждёт слота", False)
+        else:
+            self._job = job
+
+    def _write_unwanted(self) -> str:
+        """«» — писать можно (предохранитель включён, SC3 опрашивается, эфира нет); иначе — почему нет."""
         if not self._write_enabled:
             return WRITE_OFF
         if self._session is None:
@@ -376,59 +425,170 @@ class ControlWorker(QObject):
             return "эфир"
         return ""
 
-    def _drop_trim(self, why: str) -> None:
-        db, self._trim_want = self._trim_want, None
-        self.trimDone.emit(db, None, f"поправка MIC не записана: {why}")
-
-    def _write_trim(self) -> None:
-        """Слот опроса — записи поправки MIC. ЕДИНСТВЕННОЕ место окна, где зовётся `write.apply` (сторож:
-        tests/test_safety.py), и тот же путь, что у `sc3 set mic.trim … --write`: белый список, эфир (OBS спрашивается
-        заново перед сеансом и перед кадром — `_live_before_acp`), verify и типы узлов, снимок «до», один кадр,
-        чтение назад, откат при расхождении, журнал `writes.jsonl` (`sc3 undo` его видит). Темп общий с опросом:
-        каждое обращение сеанса к SC3 ждёт свой слот (`Sc3.pace` → `_pace`), так что вместе с опросом — не больше
-        одного обращения за 0,5 с. Поток при этом занят (~1,5 с): опрос ждёт, пачки после не бывает."""
-        from opensc3 import write as W
-        db, self._trim_want = self._trim_want, None
-        if why := self._trim_unwanted():
+    def _drop_writes(self, why: str) -> None:
+        """Ждущие просьбы — мимо (опрос остановлен, предохранитель выключен): сказать окну."""
+        if self._trim_want is not None:
+            db, self._trim_want = self._trim_want, None
             self.trimDone.emit(db, None, f"поправка MIC не записана: {why}")
+        if self._job is not None:
+            title, self._job = JOB_TITLE[self._job], None
+            self.jobDone.emit(title, f"{title}: не записано — {why}", False)
+
+    def _journal_written(self) -> dict[str, int]:
+        """Что оставил последний сеанс журнала записи (для подписи профиля): чтение файла — здесь, не в интерфейсе."""
+        path = self._core.journal_path()
+        try:
+            return poll.journal_written(W.last_session(path)) if path is not None else {}
+        except Exception as e:  # noqa: BLE001 — журнал не прочитался: подпись просто будет осторожнее
+            log.info("журнал записи: %s", e)
+            return {}
+
+    def _run_job(self) -> None:
+        """Слот — записи: сначала профиль или возврат из меню, иначе ручка MIC. План — здесь, запись — `_apply_plan`."""
+        from opensc3 import profiles as PR
+        if self._job is None:
+            db, self._trim_want = self._trim_want, None
+            self._apply_plan(W.plan_write([("mic.trim", db)]), TRIM_WHAT, trim=db)
+            return
+        job, self._job = self._job, None
+        title = JOB_TITLE[job]
+        try:
+            if job == UNDO:   # тот же путь, что `sc3 undo --write`
+                path = self._core.journal_path()
+                rows = W.last_session(path) if path is not None else []
+                writes = W.undo_writes(rows)
+                if not writes:
+                    self.jobDone.emit(title, "Возвращать нечего: журнал пуст или последний сеанс ничего не изменил",
+                                      True)
+                    return
+                sid = rows[0]["session"]
+                plan, what, undoes = W.plan_write(writes), f"window undo {sid}", sid
+            else:
+                prof = PR.PROFILES[job]
+                plan, what, undoes = W.plan_write(prof.items), f"window profile {prof.name}", None
+        except W.WriteError as e:
+            self.jobDone.emit(title, f"{title}: не записано — {e}", False)
+            return
+        self._apply_plan(plan, what, undoes=undoes, title=title)
+
+    def _apply_plan(self, plan, what: str, *, undoes: str | None = None, title: str = "",
+                    trim: float | None = None) -> None:
+        """ЕДИНСТВЕННОЕ место окна, где зовётся `write.apply` (сторож: tests/test_safety.py, класс Window): ручка MIC
+        (`trim`), профиль и возврат (`title`). Тот же путь, что у `sc3 set|profile apply|undo --write`: белый список,
+        эфир (OBS спрашивается заново перед сеансом и перед каждым кадром — `_live_before_acp`), verify и типы узлов,
+        снимок «до», кадры по одному с чтением назад, откат при расхождении, журнал `writes.jsonl` (`sc3 undo` его
+        видит). Темп общий с опросом: каждое обращение сеанса к SC3 ждёт свой слот (`Sc3.pace` → `_pace`) — вместе с
+        опросом не больше одного обращения за 0,5 с. «Стоп» (`request_stop`) — перед следующим кадром: стоп и откат
+        записанного в этом сеансе; эфир — стоп без отката (вернуть после эфира). Поток всё это время занят."""
+        if why := self._write_unwanted():
+            if trim is not None:
+                self.trimDone.emit(trim, None, f"поправка MIC не записана: {why}")
+            else:
+                self.jobDone.emit(title, f"{title}: не записано — {why}", False)
             return
         session = self._session
-        journal = W.Journal(self._core.journal_path(), what=TRIM_WHAT)
+        total = self._frames(plan) if title else 0
+
+        def step(op: str, n: int, written: int, param, back: int | None) -> None:
+            if back is not None and param.addr in self._plan.nodes:   # прочитано назад — это чтение узла
+                vals = list(self._plan.nodes[param.addr])
+                if param.idx < len(vals):
+                    vals[param.idx] = back
+                    self._plan.nodes[param.addr] = tuple(vals)
+                    update = {"nodes": {param.addr: tuple(vals)}}
+                    if param.addr == R.MIC_TRIM:
+                        update["mic_trim"] = R.mic_trim(vals)
+                    self.polled.emit(update)
+            if op == "rollback":
+                self.writeProgress.emit(f"{title} — откат", n, written)
+            else:
+                self.writeProgress.emit(title, n, max(total, n))
+
+        journal = ProgressJournal(self._core.journal_path(), what=what, undoes=undoes,
+                                  step=step if title else (lambda *_: None))
+        self._stop.clear()
+        self._stopping = False
+        if title:
+            self.writeProgress.emit(title, 0, total)
         session.pace = self._pace
+        res, err = None, None
         try:
-            res = W.apply(session, W.plan_write([("mic.trim", db)]), live=self._live_before_acp,
-                          guard=poll.WriteGuard(self._guard), journal=journal)
-        except W.WriteRefused as e:  # эфир: ни одного кадра записи
-            self._trim_failed(db, f"поправка MIC не записана: {e}", reread=False)
-        except W.WriteError as e:    # не сошлось чтение назад (откат уже сделан), журнал, типы узлов…
-            self._trim_failed(db, f"поправка MIC не записана: {e}")
-        except Exception as e:  # noqa: BLE001 — сбой транспорта и прочее: показать, ручку вернуть, поток жив
-            log.warning("запись поправки MIC: %s", e)
-            self._trim_failed(db, f"поправка MIC не записана: {e}")
+            res = W.apply(session, plan, live=self._live_before_acp, guard=poll.WriteGuard(self._guard),
+                          journal=journal)
+        except (WriteStopped, W.WriteRefused, W.WriteError) as e:
+            err = e
+        except Exception as e:  # noqa: BLE001 — сбой транспорта и прочее: показать, поток жив
+            log.warning("запись (%s): %s", what, e)
+            err = e
+        finally:
+            session.pace = None
+        if trim is not None:
+            self._trim_result(trim, res, err)
         else:
+            self._job_result(title, total, res, err, journal)
+        self._update_poll()  # эфир, увиденный перед кадром, закрывает SC3 сразу, а не на тике статуса
+
+    def _frames(self, plan) -> int:
+        """Сколько кадров займёт план по прочитанным узлам (для «12 из 24»); 0 — не знаем."""
+        try:
+            return len(W.plan_write(plan.targets, self._plan.nodes_state()).writes)
+        except W.WriteError:
+            return 0
+
+    def _trim_result(self, db: float, res, err) -> None:
+        if err is None:
             back = next((d.readback for d in res.done if d.write.param.key == "mic.trim"), None)
             if back is None:  # писать было нечего: в SC3 уже так
                 back = W.target("mic.trim", db).value
-            got = R.mic_trim([0, 0, back])
-            self.polled.emit({"mic_trim": got, "read_at": time.time()})
-            self.trimDone.emit(db, got, "")
-        finally:
-            session.pace = None
-        self._update_poll()  # эфир, увиденный перед кадром, закрывает SC3 сразу, а не на тике статуса
-
-    def _trim_failed(self, db: float, note: str, reread: bool = True) -> None:
-        """Запись не прошла: ждущие значения — мимо, поправку — перечитать в ближайшем слоте (ручка вернётся к
-        прочитанному)."""
+            update = {"mic_trim": R.mic_trim([0, 0, back]), "read_at": time.time()}
+            if R.MIC_TRIM in self._plan.nodes:
+                vals = list(self._plan.nodes[R.MIC_TRIM])
+                vals[2] = back
+                self._plan.nodes[R.MIC_TRIM] = tuple(vals)
+                update["nodes"] = {R.MIC_TRIM: tuple(vals)}
+            self.polled.emit(update)
+            self.trimDone.emit(db, update["mic_trim"], "")
+            return
+        # не записано: ждущие значения — мимо, поправку — перечитать (ручка вернётся к прочитанному)
         self._trim_want = None
         self._trim_since = time.monotonic()
-        if reread and self._plan is not None:
+        if not isinstance(err, W.WriteRefused) and self._plan is not None:
             self._plan.retry(R.MIC_TRIM)
-        self.trimDone.emit(db, None, note)
+        self.trimDone.emit(db, None, f"поправка MIC не записана: {err}")
+
+    def _job_result(self, title: str, total: int, res, err, journal: W.Journal) -> None:
+        """Итог профиля или возврата — в шапку; узлы — перечитать по одному на слот (ящик и подпись профиля)."""
+        if self._plan is not None:
+            self._plan.reread(R.DSP_NODES)
+        if err is None:
+            n = len(res.done)
+            note = f"{title}: записано кадров — {n}" if n else f"{title}: писать нечего — в SC3 уже так"
+            if res.skipped:
+                note += "; пропущено (меняли с панели): " + ", ".join(w.param.key for w in res.skipped)
+            self.jobDone.emit(title, note, True)
+            return
+        wrote = sum(1 for e in journal.entries if e.get("op") == "write")
+        if isinstance(err, WriteStopped):
+            back = sum(1 for e in journal.entries if e.get("op") == "rollback" and e.get("ok"))
+            note = (f"{title}: остановлено — ничего не записано" if not wrote
+                    else f"{title}: остановлено — записанное в этом сеансе ({wrote}) возвращено" if back == wrote
+                    else f"{title}: остановлено, но вернуть удалось не всё — выдерни USB для полного сброса (вне эфира)")
+        elif isinstance(err, W.WriteRefused):
+            done = len(err.done)
+            note = (f"{title}: остановлено — {err}; записано {done} из {total or '?'}, "
+                    "вернуть после эфира: «Вернуть как было»" if done else f"{title}: не записано — {err}")
+        else:
+            note = f"{title}: не записано — {err}"
+        self.jobDone.emit(title, note, False)
 
     def _live_before_acp(self) -> Live:
         """Статус эфира для `write.apply`: сначала дождаться своего слота, потом спросить OBS заново — ответ свежий
-        прямо перед обращением к SC3 (правило 3), а не до паузы."""
+        прямо перед обращением к SC3 (правило 3), а не до паузы. Здесь же — «Стоп»: один раз за сеанс, чтобы
+        откат (он тоже спрашивает эфир) шёл до конца."""
         self._wait_slot()
+        if self._stop.is_set() and not self._stopping:
+            self._stopping = True
+            raise WriteStopped("остановлено из окна")
         return self._live_status()[0]
 
     def _wait_slot(self) -> None:
@@ -583,6 +743,7 @@ class Backend(QObject):
     _rescanRequest = Signal()
     _trimRequest = Signal(float, float)   # дБ, time.monotonic() просьбы
     _writeEnabledRequest = Signal(bool)
+    _jobRequest = Signal(str)             # PODCAST | UNDO
 
     # --- свойства для QML: SC3
     link = _prop("link", str, stateChanged)
@@ -622,8 +783,13 @@ class Backend(QObject):
     frozen = _prop("frozen", bool, stateChanged)
     onAirTime = _prop("onAirTime", str, clockChanged)
     # профили
-    profile = _prop("profile", str, stateChanged)
-    profiles = _prop("profiles", "QVariantList", stateChanged)
+    profile = _prop("profile", str, stateChanged)            # подпись: «Подкаст» | «заводской» | «свой» | «»
+    profiles = _prop("profiles", "QVariantList", stateChanged)  # меню профиля: [{name, note, action, enabled, active}]
+    profileHint = _prop("profileHint", str, stateChanged)    # почему пункты меню неактивны («» — активны)
+    # идущая запись профиля/возврата: «Подкаст: 12 из 24» и «Стоп»
+    writeTitle = _prop("writeTitle", str, stateChanged)      # «» — записи нет
+    writeDone = _prop("writeDone", int, stateChanged)
+    writeTotal = _prop("writeTotal", int, stateChanged)     # 0 — сколько всего, неизвестно
 
     def __init__(self, core: Core, parent: QObject | None = None, *, live_interval: float = LIVE_INTERVAL,
                  full_set_first: bool = True) -> None:
@@ -642,6 +808,12 @@ class Backend(QObject):
         self._settings = core.settings()
         self._write_enabled = bool(self._settings.value(WRITE_KEY, False, type=bool))
         self._trim_target: float | None = None   # значение ручки MIC, ещё не подтверждённое чтением назад
+        self._progress: tuple[str, int, int] = ("", 0, 0)   # запись профиля: заголовок, сделано, всего
+        # подпись профиля (poll.profile_label): чей набор в SC3 — пресета панели или записанный
+        self._base_mode = poll.BASE_CONNECT
+        self._base: dict | None = None        # узлы пресета (BASE_KNOWN)
+        self._base_new: dict = {}             # собираются после нажатия кнопки (BASE_PRESET)
+        self._written: dict | None = None     # что оставил последний сеанс журнала (от рабочего потока)
         self._props = self._compute()
         self._started = False
 
@@ -658,11 +830,14 @@ class Backend(QObject):
         self._control.polled.connect(self._on_polled)
         self._control.pollChanged.connect(self._on_poll_changed)
         self._control.trimDone.connect(self._on_trim_done)
+        self._control.jobDone.connect(self._on_job_done)
+        self._control.writeProgress.connect(self._on_write_progress)
         self._readRequest.connect(self._control.read)
         self._visibleRequest.connect(self._control.set_visible)
         self._pollRefresh.connect(self._control.refresh_poll)
         self._trimRequest.connect(self._control.want_trim)
         self._writeEnabledRequest.connect(self._control.set_write_enabled)
+        self._jobRequest.connect(self._control.want_job)
 
         self._audio_thread = QThread(self)
         self._audio_thread.setObjectName("sc3-audio")
@@ -707,7 +882,9 @@ class Backend(QObject):
         return self._continuous and self._visible
 
     def stop(self) -> None:
-        """Остановить потоки (выход из приложения). Ждёт текущий вызов ядра — не дольше пары секунд."""
+        """Остановить потоки (выход из приложения). Ждёт текущий вызов ядра — не дольше пары секунд; идущая запись
+        профиля сперва останавливается с откатом (как «Стоп»), и выход ждёт отката."""
+        self._control.request_stop()
         self._clock.stop()
         self._note_timer.stop()
         for worker, thread in ((self._control, self._control_thread), (self._audio, self._audio_thread)):
@@ -789,20 +966,97 @@ class Backend(QObject):
         self._trimRequest.emit(db, time.monotonic())
         self._publish()
 
-    def _trim_refusal(self) -> str:
-        """«» — ручку MIC можно крутить; иначе — почему нет (то же решает рабочий поток и сам write.apply)."""
+    def _write_refusal(self) -> str:
+        """«» — писать в SC3 сейчас можно; иначе — почему нет (то же решает рабочий поток и сам write.apply)."""
         st = self._state
         if not self._write_enabled:
             return WRITE_OFF
         if st.live is not Live.OFF:
             return "идёт эфир — изменения выключены" if st.live is Live.ON else "эфир не определён — изменения выключены"
         if st.sc3.link is not Link.CONNECTED:
-            return "SC3 не на связи — поправку не записать"
-        if st.sc3.mic.trim_db is None:
-            return "поправка MIC ещё не прочитана"
+            return "SC3 не на связи — записать нельзя"
         if not self._polling:
-            return "SC3 сейчас не опрашивается — поправку не записать"
+            return "SC3 сейчас не опрашивается — записать нельзя"
         return ""
+
+    def _trim_refusal(self) -> str:
+        """«» — ручку MIC можно крутить; иначе — почему нет."""
+        if why := self._write_refusal():
+            return why
+        if self._progress[0]:
+            return f"идёт запись ({self._progress[0]}) — ручка подождёт"
+        if self._state.sc3.mic.trim_db is None:
+            return "поправка MIC ещё не прочитана"
+        return ""
+
+    # --- профиль: меню, прогресс, подпись --------------------------------------------------------------
+
+    @Slot(str)
+    def profileAction(self, action: str) -> None:
+        """Пункт меню профиля: «Подкаст — применить» (`podcast`), «Вернуть как было» (`undo`, как `sc3 undo`).
+        За тем же предохранителем; пишет рабочий поток в ближайшем слоте, прогресс — в шапке."""
+        if action == FACTORY:
+            self._set_note("«Как с завода» — позже", live=False)
+            return
+        if action not in JOB_TITLE:
+            return
+        if why := self._write_refusal():
+            self._set_note(why, live=False)
+            return
+        if self._progress[0]:
+            self._set_note(f"запись уже идёт ({self._progress[0]})", live=False)
+            return
+        self._progress = (JOB_TITLE[action], 0, 0)
+        self._jobRequest.emit(action)
+        self._publish()
+
+    @Slot()
+    def stopWrite(self) -> None:
+        """«Стоп»: сеанс записи останавливается перед следующим кадром и откатывает записанное в этом сеансе."""
+        if self._progress[0]:
+            self._control.request_stop()  # напрямую: поток записи занят сеансом и сигнал не прочтёт
+            self._set_note(f"{self._progress[0]}: останавливаю и возвращаю записанное…", live=False)
+
+    def _on_write_progress(self, title: str, done: int, total: int) -> None:
+        if title:
+            self._progress = (title, done, total)
+            self._publish()
+
+    def _on_job_done(self, title: str, note: str, ok: bool) -> None:
+        self._progress = ("", 0, 0)
+        if note:
+            self._set_note(note, live=False)
+        else:
+            self._publish()
+
+    def _profile_rows(self, label: str) -> list[dict]:
+        can = not self._write_refusal() and not self._progress[0]
+        return [
+            {"name": "Подкаст — применить", "note": "EQ голоса, шумодав, поправка MIC +6 дБ", "action": PODCAST,
+             "enabled": can, "active": label == poll.PODCAST_LABEL},
+            {"name": "Вернуть как было", "note": "отменить последнюю запись — как sc3 undo", "action": UNDO,
+             "enabled": can, "active": False},
+            {"name": "Как с завода", "note": "позже", "action": FACTORY, "enabled": False, "active": False},
+        ]
+
+    def _base_update(self, update: dict) -> None:
+        """Подпись профиля: «заводской» — пока в SC3 пресет панели. Пресет узнаётся по набору, прочитанному сразу
+        после нажатия кнопки голоса/ELECTRIC (`preset_changed` → `preset`), а после подключения — по журналу: если
+        в SC3 ровно то, что оставил последний сеанс записи, набор свой, иначе это пресет."""
+        if "written" in update:
+            self._written = update["written"]
+        if update.get("preset_changed"):
+            self._base_mode, self._base, self._base_new = poll.BASE_PRESET, None, {}
+        if "preset" in update and self._base_mode == poll.BASE_PRESET:
+            self._base_new.update(update["preset"])
+            if all(c in self._base_new for c in R.DSP_NODES):
+                self._base_mode, self._base = poll.BASE_KNOWN, dict(self._base_new)
+        nodes = self._state.sc3.nodes
+        if self._base_mode == poll.BASE_CONNECT and self._written is not None and all(c in nodes for c in R.DSP_NODES):
+            if poll.written_matches(self._written, nodes):
+                self._base_mode, self._base = poll.BASE_WRITTEN, None
+            else:
+                self._base_mode, self._base = poll.BASE_KNOWN, dict(nodes)
 
     def _on_trim_done(self, want: float, got: float | None, note: str) -> None:
         if note:  # не записано: ручка — к прочитанному значению, причина — в шапке
@@ -870,6 +1124,7 @@ class Backend(QObject):
         if self._probe_link is not Link.CONNECTED:
             return
         self._state = replace(self._state, sc3=poll.merge(self._state.sc3, update))
+        self._base_update(update)
         self._publish()
 
     def _on_poll_changed(self, active: bool, note: str) -> None:
@@ -888,6 +1143,8 @@ class Backend(QObject):
     def _on_probed(self, link: Link, detail: str | None) -> None:
         prev = self._probe_link
         self._probe_link = link
+        if link is not prev:  # (пере)подключили или выдернули: после питания в SC3 снова пресет — решать заново
+            self._base_mode, self._base, self._base_new, self._written = poll.BASE_CONNECT, None, {}, None
         if link is not Link.CONNECTED:
             # Нет на шине или нет прав: прежние значения уже не про это устройство.
             self._trim_target = None
@@ -960,6 +1217,11 @@ class Backend(QObject):
         props["trimMicPending"] = self._trim_target is not None
         if self._trim_target is not None:
             props["trimMic"] = self._trim_target
+        label = poll.profile_label(self._state.sc3.nodes, self._base_mode, self._base)
+        props["profile"] = label
+        props["profiles"] = self._profile_rows(label)
+        props["profileHint"] = "" if self._progress[0] else self._write_refusal()
+        props["writeTitle"], props["writeDone"], props["writeTotal"] = self._progress
         return props
 
     def _publish(self) -> None:

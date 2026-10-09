@@ -40,8 +40,14 @@ JOBS: dict[str, tuple[str, str | None, bool, str]] = {
     "trim-onair": ("write-onair", None, False, "Ручка MIC в эфире — под замком"),
     "trim-off": ("normal", None, False, "Запись выключена: подсказка"),
     "settings": ("normal", None, False, "Меню-шестерёнка: предохранитель"),
+    "profiles-menu": ("write", None, False, "Меню профиля"),
+    "podcast-progress": ("write", None, False, "«Подкаст»: запись идёт, «Стоп»"),
+    "drawer-mic-podcast": ("write", "mic", False, "Ящик MIC во время «Подкаста»"),
 }
-TIPS = {"trim-off": "trim-off", "settings": "settings"}  # кадр → `--tip` (подсказка или меню без мыши)
+# кадр → доп. аргументы: подсказка или меню без мыши (`--tip`), запись профиля на подделке (`--apply`), пауза
+EXTRA = {"trim-off": ["--tip", "trim-off"], "settings": ["--tip", "settings"], "profiles-menu": ["--tip", "profiles"],
+         "podcast-progress": ["--apply", "podcast", "--settle", "11000"], "trim-onair": ["--settle", "6000"],
+         "drawer-mic-podcast": ["--apply", "podcast", "--settle", "16000"]}
 SHEET = ["panel", "onair", "onair-muted", "disconnected", "no-access", "unknown-live"]
 
 
@@ -52,8 +58,7 @@ def shoot(name: str, out: Path) -> bool:
         cmd += ["--section", section]
     if software:
         cmd.append("--software")
-    if name in TIPS:
-        cmd += ["--tip", TIPS[name]]
+    cmd += EXTRA.get(name, [])
     r = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=60, check=False)
     sys.stdout.write(r.stdout)
     if r.returncode != 0:

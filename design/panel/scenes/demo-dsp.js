@@ -1,15 +1,18 @@
 .pragma library
 
-// Synthetic drawer data for the mock-ups (EQ, gate, compressor, voices, autotune). The app's
-// core does not read any of it yet: there `sc3.dsp` is {} and every card whose key is missing
-// shows «появится позже» instead of numbers. Shape (the contract for the Python side; every
-// key is optional, a card appears as soon as its key is there):
+// Synthetic drawer data for the mock-ups (EQ, gate, compressor, voices, autotune). The app
+// builds `sc3.dsp` from the nodes it read (opensc3/app/view.py, drawer_dsp: eq, gate, gain);
+// every card whose key is missing shows «появится позже» instead of numbers. Shape (the
+// contract for the Python side; every key is optional, a card appears as soon as its key is there):
 //   Row   = { label: string, value: string (ready to show), fraction: 0..1 (bar end),
 //             centre?: 0..1 (bar is bipolar around it) }               -> ParamRow.row
 //   Value = { value: string (ready to show), fraction: 0..1 }
-//   eq:       { on: bool, bands: [{ kind: "hp" | "ls" | "pk", f: Hz, q: real, g: dB,
-//                                   name: string }], selected?: int (band being edited) }
-//   gate:     { on: bool, level: Value (input now), threshold: 0..1 (on the level bar),
+//   eq:       { on: bool, bands: [{ n?: slot number, kind: "pk" | "ls" | "hs" | "lp" | "hp" |
+//                                   "bp" | "notch", f: Hz, q: real, g: dB, name: string }]
+//                                  (enabled filters: the curve), selected?: int,
+//               slots: [{ n, on, empty, kind, name, f, q, g, freq: "80 Гц", qText: "Q 0,70",
+//                         gain: "+2,0 дБ", shaped: bool (gain matters) }] (all ten) }
+//   gate:     { on: bool, level?: Value (input now), threshold: 0..1 (on the level bar),
 //               rows: [Row] }
 //   comp:     { on: bool, threshold: dB, ratio: real, knee: dB, input: dB (now),
 //               reduction: Value (gain reduction now), rows: [Row] }
@@ -29,17 +32,42 @@ var voiceRows = [
     { label: "Громкость голоса", value: "+1,0 дБ", fraction: 13 / 24, centre: 0.5 }
 ]
 
+var bands = [
+    { n: 1, kind: "hp", f: 80, q: 0.707, g: 0, name: "ФВЧ" },
+    { n: 2, kind: "ls", f: 160, q: 0.707, g: 2.0, name: "полка НЧ" },
+    { n: 3, kind: "pk", f: 450, q: 1.4, g: -2.5, name: "пик" },
+    { n: 4, kind: "pk", f: 4000, q: 1.0, g: 3.5, name: "пик" },
+    { n: 5, kind: "pk", f: 7500, q: 3.0, g: -2.0, name: "пик" }
+];
+
+function fmt(v, digits) {
+    return v.toFixed(digits).replace(".", ",");
+}
+
+// The ten slots of the node: the bands above, then empty ones.
+function slots() {
+    var out = [];
+    for (var i = 0; i < 10; ++i) {
+        var b = bands[i];
+        if (b) {
+            out.push({ n: i + 1, on: true, empty: false, kind: b.kind, name: b.name, f: b.f, q: b.q, g: b.g,
+                       freq: b.f >= 1000 ? fmt(b.f / 1000, b.f % 1000 ? 1 : 0) + " кГц" : b.f + " Гц",
+                       qText: "Q " + fmt(b.q, 2), gain: (b.g > 0 ? "+" : b.g < 0 ? "−" : "+") + fmt(Math.abs(b.g), 1) + " дБ",
+                       shaped: b.kind === "pk" || b.kind === "ls" || b.kind === "hs" });
+        } else {
+            out.push({ n: i + 1, on: false, empty: true, kind: "pk", name: "пик", f: 0, q: 0, g: 0,
+                       freq: "0 Гц", qText: "Q 0,00", gain: "+0,0 дБ", shaped: true });
+        }
+    }
+    return out;
+}
+
 var dsp = ({
     eq: {
         on: true,
         selected: 3,
-        bands: [
-            { kind: "hp", f: 80, q: 0.707, g: 0, name: "срез" },
-            { kind: "ls", f: 160, q: 0.707, g: 2.0, name: "полка" },
-            { kind: "pk", f: 450, q: 1.4, g: -2.5, name: "пик" },
-            { kind: "pk", f: 4000, q: 1.0, g: 3.5, name: "пик" },
-            { kind: "pk", f: 7500, q: 3.0, g: -2.0, name: "пик" }
-        ]
+        bands: bands,
+        slots: slots()
     },
     gate: {   // bar: -80..0 dBFS
         on: true,

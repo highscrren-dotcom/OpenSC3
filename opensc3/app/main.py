@@ -19,10 +19,12 @@ DBUS_SERVICE = "dev.s1dd1.opensc3"
 DBUS_PATH = "/Panel"
 DBUS_INTERFACE = "dev.s1dd1.opensc3.Panel"
 QML_MAIN = Path(__file__).resolve().parent / "qml" / "Main.qml"
-SHOT_SETTLE_MS = 3200                      # --screenshot: поправка MIC + полный набор подделки, эфир, анимации
+SHOT_SETTLE_MS = 4400                      # --screenshot: голос, нота, узлы MIC + полный набор подделки, эфир
 SHOT_LIVE_INTERVAL = 1.0
-# --screenshot --tip: подсказка полосы поправок (как в макетах) или открытое меню-шестерёнка
-SHOT_TIPS = {"trim-off": "forcedTip", "trim-mic": "forcedTip", "trim-linein": "forcedTip", "settings": "settingsOpen"}
+# --screenshot --tip: подсказка полосы поправок (как в макетах) или открытое меню (шестерёнка, профиль)
+SHOT_TIPS = {"trim-off": "forcedTip", "trim-mic": "forcedTip", "trim-linein": "forcedTip", "settings": "settingsOpen",
+             "profiles": "profileOpen"}
+SHOT_APPLY_MS = 2000                       # --screenshot --apply: когда нажать пункт меню (запись ждёт узлы)
 
 log = logging.getLogger("opensc3.app")
 
@@ -36,6 +38,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     ap.add_argument("--section", choices=["mic", "voice", "electric"], help="с --screenshot: открыть этот ящик")
     ap.add_argument("--software", action="store_true", help="с --screenshot: без GPU (плоский вид)")
     ap.add_argument("--tip", choices=list(SHOT_TIPS), help="с --screenshot: показать подсказку или меню")
+    ap.add_argument("--apply", dest="shot_profile", choices=["podcast"], help="с --screenshot и --fake: применить профиль (снять прогресс)")
+    ap.add_argument("--settle", type=int, default=SHOT_SETTLE_MS, metavar="МС",
+                    help=f"с --screenshot: сколько ждать до снимка (по умолчанию {SHOT_SETTLE_MS})")
     ap.add_argument("-v", "--verbose", action="store_true", help="подробный журнал")
     return ap.parse_args(argv)
 
@@ -143,6 +148,8 @@ def main(argv: list[str] | None = None) -> int:
     elif not (args.tray and tray is not None):
         show_window()
     backend.start()
+    if args.screenshot and args.shot_profile and args.fake:   # только на подделке: снимок прогресса записи
+        QTimer.singleShot(SHOT_APPLY_MS, lambda: backend.profileAction(args.shot_profile))
     rc = screenshot(app, window, args, QTimer) if args.screenshot else app.exec()
     window = None
     del engine  # сначала QML, потом бэкенд: иначе привязки на выходе увидят sc3 = null
@@ -157,7 +164,7 @@ def prepare_screenshot(window, args) -> None:
         window.setProperty("section", args.section)
     if args.tip:
         prop = SHOT_TIPS[args.tip]
-        window.setProperty(prop, True if prop == "settingsOpen" else args.tip)
+        window.setProperty(prop, args.tip if prop == "forcedTip" else True)
     window.setWidth(round(window.property("designWidth")))  # 1:1, а не под экран offscreen (800×600)
     window.setHeight(round(window.property("fullHeight")))  # по содержимому: ящик целиком, без прокрутки
     window.show()
@@ -177,7 +184,7 @@ def screenshot(app, window, args, QTimer) -> int:
             print(f"opensc3: не удалось снять {args.screenshot}", file=sys.stderr)
         app.quit()
 
-    QTimer.singleShot(SHOT_SETTLE_MS, grab)
+    QTimer.singleShot(args.settle, grab)
     app.exec()
     return result["rc"]
 

@@ -2,11 +2,12 @@ import QtQuick
 import QtQuick.Shapes
 
 // Voice EQ: magnitude response of the band chain (RBJ biquads at the SC3's
-// 44.1 kHz), log frequency axis 20 Hz - 20 kHz, +-15 dB. Bands come from sc3.dsp.eq.
+// 44.1 kHz), log frequency axis 20 Hz - 20 kHz, +-15 dB. Bands come from sc3.dsp.eq:
+// the enabled filters of node 0xA2 (kinds as in layouts.EQ_TYPES, view.EQ_KIND).
 Item {
     id: eq
     required property Tokens theme
-    required property var bands        // [{ kind: "hp" | "ls" | "pk", f: Hz, q, g: dB, name }]
+    required property var bands        // [{ kind: "pk" | "ls" | "hs" | "lp" | "hp" | "bp" | "notch", f: Hz, q, g: dB }]
     property int selected: -1          // band being edited: filled handle
     property real fs: 44100
     property real range: 15
@@ -35,9 +36,23 @@ Item {
             b2 = A * ((A + 1) - (A - 1) * cw - s);
             a0 = (A + 1) + (A - 1) * cw + s; a1 = -2 * ((A - 1) + (A + 1) * cw);
             a2 = (A + 1) + (A - 1) * cw - s;
-        } else {  // hp
-            b0 = (1 + cw) / 2; b1 = -(1 + cw); b2 = b0;
+        } else if (b.kind === "hs") {
+            const s = 2 * Math.sqrt(A) * alpha;
+            b0 = A * ((A + 1) + (A - 1) * cw + s); b1 = -2 * A * ((A - 1) + (A + 1) * cw);
+            b2 = A * ((A + 1) + (A - 1) * cw - s);
+            a0 = (A + 1) - (A - 1) * cw + s; a1 = 2 * ((A - 1) - (A + 1) * cw);
+            a2 = (A + 1) - (A - 1) * cw - s;
+        } else {
             a0 = 1 + alpha; a1 = -2 * cw; a2 = 1 - alpha;
+            if (b.kind === "lp") {
+                b0 = (1 - cw) / 2; b1 = 1 - cw; b2 = b0;
+            } else if (b.kind === "bp") {   // 0 dB at the centre
+                b0 = alpha; b1 = 0; b2 = -alpha;
+            } else if (b.kind === "notch") {
+                b0 = 1; b1 = -2 * cw; b2 = 1;
+            } else {  // hp
+                b0 = (1 + cw) / 2; b1 = -(1 + cw); b2 = b0;
+            }
         }
         const w = 2 * Math.PI * f / fs;
         const c1 = Math.cos(w), s1 = Math.sin(w), c2 = Math.cos(2 * w), s2 = Math.sin(2 * w);
@@ -167,13 +182,13 @@ Item {
             height: width
             radius: width / 2
             x: eq.xOf(band.f) - width / 2
-            y: eq.yOf(Math.max(-eq.range, eq.totalDb(band.f))) - height / 2
+            y: eq.yOf(Math.max(-eq.range, Math.min(eq.range, eq.totalDb(band.f)))) - height / 2
             color: sel ? eq.theme.accent : eq.theme.graphBg
             border.width: 1.5
             border.color: sel ? eq.theme.accentLight : eq.theme.accent
             Text {
                 anchors.centerIn: parent
-                text: handle.index + 1
+                text: handle.band.n !== undefined ? handle.band.n : handle.index + 1
                 color: handle.sel ? "#0B0906" : eq.theme.accent
                 font.family: eq.theme.fontValue
                 font.pixelSize: 10
